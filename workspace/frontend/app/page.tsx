@@ -1,6 +1,7 @@
 'use client';
 
 import { desktopHost } from '@/lib/desktop-host';
+import { usesInlineLogin, usesOidcLogin } from '@/lib/auth-mode';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
@@ -874,7 +875,7 @@ function MembershipHome({
     // Also end the central openagents.org session — otherwise the login
     // redirect immediately re-authenticates and bounces back here. On localhost
     // there's no central login, so just fall through to the inline sign-in gate.
-    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && !desktopHost()) {
+    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && !desktopHost() && !usesInlineLogin()) {
       window.location.href = 'https://openagents.org/logout';
     }
   };
@@ -1020,7 +1021,9 @@ const LOGIN_BOUNCE_KEY = 'oa_login_bounce_at';
 
 function SignInGate({ signIn }: { signIn: () => Promise<void> }) {
   const t = useT();
-  const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || !!desktopHost());
+  const { authError } = useOpenAgentsAuth();
+  const [signInError, setSignInError] = useState('');
+  const isLocal = typeof window !== 'undefined' && (usesInlineLogin() || window.location.hostname === 'localhost' || !!desktopHost());
   const [showInline, setShowInline] = useState(false);
 
   useEffect(() => {
@@ -1056,9 +1059,10 @@ function SignInGate({ signIn }: { signIn: () => Promise<void> }) {
           {t('auth.signInBody')}
         </p>
       </div>
-      <BrutalBtn onClick={signIn} color="blue">
-        {desktopHost() ? t('auth.signInTitle') : t('workspaceGate.signInWithGoogle')}
+      <BrutalBtn onClick={() => { void signIn().catch((error: unknown) => setSignInError(error instanceof Error ? error.message : 'Sign-in failed')); }} color="blue">
+        {desktopHost() || usesOidcLogin() ? t('auth.signInTitle') : t('workspaceGate.signInWithGoogle')}
       </BrutalBtn>
+      {(authError || signInError) && <p role="alert" className="text-sm text-red-600">{authError || signInError}</p>}
     </div>
   );
 }

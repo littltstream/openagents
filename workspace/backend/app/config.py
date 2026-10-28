@@ -17,8 +17,13 @@ class Config:
         "postgresql://postgres:dev@localhost:5432/openagents_workspace",
     )
 
-    # Auth mode: "workspace_token" (self-hosted) or "firebase" (hosted)
+    # Human login: workspace_token, firebase, or oidc (self-hosted Keycloak).
     AUTH_MODE: str = os.environ.get("AUTH_MODE", "workspace_token")
+
+    OIDC_ISSUER_URL: str = os.environ.get("OIDC_ISSUER_URL", "").rstrip("/")
+    OIDC_CLIENT_ID: str = os.environ.get("OIDC_CLIENT_ID", "openagents-workspace")
+    # May use the private Docker address while tokens retain the public issuer.
+    OIDC_JWKS_URL: str = os.environ.get("OIDC_JWKS_URL", "")
 
     # Firebase (used for user login on workspace.openagents.org).
     #

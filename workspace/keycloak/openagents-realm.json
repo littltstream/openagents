@@ -1,0 +1,43 @@
+{
+  "realm": "openagents",
+  "enabled": true,
+  "displayName": "OpenAgents",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "rememberMe": true,
+  "sslRequired": "external",
+  "clients": [
+    {
+      "clientId": "openagents-workspace",
+      "name": "OpenAgents Workspace",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["${WORKSPACE_WEB_ORIGIN}/*"],
+      "webOrigins": ["${WORKSPACE_WEB_ORIGIN}"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "${WORKSPACE_WEB_ORIGIN}/login"
+      },
+      "defaultClientScopes": ["basic", "web-origins", "acr", "roles", "profile", "email"],
+      "protocolMappers": [
+        {
+          "name": "workspace-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "openagents-workspace",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ]
+}

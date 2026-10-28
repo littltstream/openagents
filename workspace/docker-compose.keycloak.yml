@@ -1,0 +1,67 @@
+# Opt-in overlay: docker compose --env-file .env.auth -f docker-compose.yml
+# -f docker-compose.keycloak.yml up -d --build
+services:
+  keycloak-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Set KEYCLOAK_DB_PASSWORD in .env.auth}
+    volumes:
+      - keycloak_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.1
+    restart: unless-stopped
+    command: ["start", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Set KEYCLOAK_DB_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD}
+      KC_HOSTNAME: ${KEYCLOAK_PUBLIC_URL:?Set KEYCLOAK_PUBLIC_URL}
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      WORKSPACE_WEB_ORIGIN: ${WORKSPACE_WEB_ORIGIN:?Set WORKSPACE_WEB_ORIGIN}
+    ports:
+      - "127.0.0.1:${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      - ./keycloak/openagents-realm.json:/opt/keycloak/data/import/openagents-realm.json:ro
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+
+  backend:
+    environment:
+      AUTH_MODE: oidc
+      OIDC_ISSUER_URL: ${KEYCLOAK_PUBLIC_URL}/realms/openagents
+      OIDC_CLIENT_ID: openagents-workspace
+      OIDC_JWKS_URL: http://keycloak:8080/realms/openagents/protocol/openid-connect/certs
+      CORS_ORIGINS: ${WORKSPACE_WEB_ORIGIN}
+    depends_on:
+      keycloak:
+        condition: service_started
+
+  frontend:
+    build:
+      args:
+        NEXT_PUBLIC_API_URL: ${WORKSPACE_API_URL:?Set WORKSPACE_API_URL}
+        NEXT_PUBLIC_AUTH_MODE: oidc
+        NEXT_PUBLIC_KEYCLOAK_URL: ${KEYCLOAK_PUBLIC_URL}
+        NEXT_PUBLIC_KEYCLOAK_REALM: openagents
+        NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: openagents-workspace
+        NEXT_PUBLIC_INLINE_LOGIN: "1"
+    # Production must serve the newly built image, not old .next anonymous
+    # volumes or a source checkout over /app. Requires Docker Compose >=2.24.4.
+    volumes: !reset []
+
+volumes:
+  keycloak_pgdata:

@@ -5,6 +5,7 @@ import { capture, identify } from './analytics';
 import { desktopHost } from './desktop-host';
 import { workspaceApi } from './api';
 import { clearWorkspaceSession, loadWorkspaceSession } from './workspace-session';
+import { usesOidcLogin } from './auth-mode';
 
 interface OpenAgentsUser {
   email: string;
@@ -17,6 +18,7 @@ interface OpenAgentsAuthContextValue {
   idToken: string | null;
   loading: boolean;
   isOpenAgentsDomain: boolean;
+  authError: string | null;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -48,11 +50,50 @@ export function OpenAgentsAuthProvider({ children }: { children: React.ReactNode
   const [idToken, setIdToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [isOpenAgentsDomain, setIsOpenAgentsDomain] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
     const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
-    const isDomain = OPENAGENTS_HOSTNAMES.includes(hostname);
+    const oidc = usesOidcLogin() && !desktopHost();
+    const isDomain = oidc || OPENAGENTS_HOSTNAMES.includes(hostname);
     setIsOpenAgentsDomain(isDomain);
+
+    if (oidc) {
+      let active = true;
+      let cleanup: (() => void) | undefined;
+      const failed = (error: unknown) => {
+        if (!active) return;
+        setUser(null); setIdToken(null); setLoading(false);
+        setAuthError(error instanceof Error ? error.message : 'Keycloak authentication failed');
+      };
+      import('./oidc').then(async ({ getOidcClient, getOidcIdentity }) => {
+        const client = await getOidcClient();
+        if (!active) return;
+        const refresh = async (force = false) => {
+          const session = await getOidcIdentity(force);
+          if (!active) return null;
+          setUser(session?.user || null); setIdToken(session?.token || null);
+          setAuthError(null); setLoading(false);
+          return session?.token || null;
+        };
+        client.onTokenExpired = () => { void refresh().catch(failed); };
+        client.onAuthLogout = () => { if (active) { setUser(null); setIdToken(null); } };
+        client.onAuthRefreshError = () => failed(new Error('Keycloak session expired; sign in again'));
+        workspaceApi.setBearerRefresher(async () => {
+          try { return await refresh(true); } catch (error) { failed(error); throw error; }
+        });
+        const visible = () => { if (document.visibilityState === 'visible') void refresh().catch(failed); };
+        document.addEventListener('visibilitychange', visible);
+        cleanup = () => {
+          client.onTokenExpired = undefined; client.onAuthLogout = undefined;
+          client.onAuthRefreshError = undefined;
+          document.removeEventListener('visibilitychange', visible);
+          workspaceApi.setBearerRefresher(null);
+        };
+        await refresh();
+      }).catch(failed);
+      return () => { active = false; cleanup?.(); };
+    }
 
     if (!isDomain) {
       setLoading(false);
@@ -162,6 +203,11 @@ export function OpenAgentsAuthProvider({ children }: { children: React.ReactNode
   }), []);
 
   const signIn = useCallback(async () => {
+    if (usesOidcLogin() && !desktopHost()) {
+      const { signInWithOidc } = await import('./oidc');
+      await signInWithOidc();
+      return;
+    }
     const host = desktopHost();
     if (host) { host.signIn(); return; }
     const { signInWithGoogle, getIdToken, getFreshIdToken, getResolvedEmail } = await import('./firebase');
@@ -188,6 +234,11 @@ export function OpenAgentsAuthProvider({ children }: { children: React.ReactNode
   }, []);
 
   const signOut = useCallback(async () => {
+    if (usesOidcLogin() && !desktopHost()) {
+      const { signOutWithOidc } = await import('./oidc');
+      await signOutWithOidc();
+      return;
+    }
     // Drop the workspace session first so a Firebase failure (Google
     // unreachable) can't leave the user signed in.
     clearWorkspaceSession();
@@ -200,7 +251,7 @@ export function OpenAgentsAuthProvider({ children }: { children: React.ReactNode
   }, []);
 
   return (
-    <OpenAgentsAuthContext.Provider value={{ user, idToken, loading, isOpenAgentsDomain, signIn, signOut }}>
+    <OpenAgentsAuthContext.Provider value={{ user, idToken, loading, isOpenAgentsDomain, authError, signIn, signOut }}>
       {children}
     </OpenAgentsAuthContext.Provider>
   );

@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 
 function Login() {
   const t = useT();
-  const { user, idToken, loading, signIn } = useOpenAgentsAuth();
+  const { user, idToken, loading, signIn, authError } = useOpenAgentsAuth();
   const params = useSearchParams();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -23,7 +23,7 @@ function Login() {
       try { await signIn(); } catch (e) { setError(e instanceof Error ? e.message : t('workspaceGate.loadFailedTitle')); }
       finally { setBusy(false); }
     }}>{t('workspaceGate.logIn')}</Button>
-    {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+    {(error || authError) && <p role="alert" className="text-sm text-destructive">{error || authError}</p>}
   </main>;
 }
 export default function LoginPage() { return <Suspense><Login /></Suspense>; }

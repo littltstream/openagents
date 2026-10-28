@@ -1880,8 +1880,8 @@ def add_collaborator(
     added_by = None
     bearer = _extract_bearer(authorization)
     if bearer:
-        from app.firebase_auth import verify_firebase_token
-        added_by = verify_firebase_token(bearer)
+        from app.firebase_auth import verify_identity_token
+        added_by = verify_identity_token(bearer)
 
     # Upsert: update role if already exists
     existing = db.execute(

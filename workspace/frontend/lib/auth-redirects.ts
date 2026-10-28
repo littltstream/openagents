@@ -1,4 +1,5 @@
 import { desktopHost } from './desktop-host';
+import { usesInlineLogin, usesOidcLogin } from './auth-mode';
 
 // Central auth redirects for the workspace app.
 //
@@ -14,10 +15,8 @@ const CENTRAL = 'https://openagents.org';
 // localhost: sign in with the app's own Firebase popup instead of bouncing
 // through openagents.org. Invitation acceptance explicitly uses central login
 // so every account provider is available and its return URL is preserved.
-const INLINE_LOGIN = process.env.NEXT_PUBLIC_INLINE_LOGIN === '1';
-
 function isLocalhost(): boolean {
-  if (INLINE_LOGIN) return true;
+  if (usesInlineLogin()) return true;
   return typeof window !== 'undefined' && window.location.hostname === 'localhost';
 }
 
@@ -30,6 +29,11 @@ export function goToCentralLogin(fallbackSignIn?: () => void, options?: { forceC
   if (typeof window === 'undefined') return;
   const host = desktopHost();
   if (host) { host.signIn(); return; }
+  if (usesOidcLogin()) {
+    if (fallbackSignIn) fallbackSignIn();
+    else redirectToLogin();
+    return;
+  }
   if (isLocalhost() && !options?.forceCentral) {
     fallbackSignIn?.();
     return;
@@ -43,6 +47,10 @@ export function goToCentralLogin(fallbackSignIn?: () => void, options?: { forceC
  * land on the stable signed-out page (no auto re-login bounce).
  */
 export async function goToCentralLogout(signOut: () => Promise<void>): Promise<void> {
+  if (usesOidcLogin() && !desktopHost()) {
+    await signOut();
+    return;
+  }
   try {
     await signOut();
   } catch {

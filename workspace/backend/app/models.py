@@ -399,6 +399,20 @@ class User(Base):
     )
 
 
+class UserIdentity(Base):
+    """Stable external identity. Provider account linking happens in Keycloak."""
+    __tablename__ = "user_identities"
+
+    issuer = Column(Text, primary_key=True)
+    subject = Column(Text, primary_key=True)
+    user_id = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_now, server_default=text("NOW()"))
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "issuer", name="uq_user_identities_user_issuer"),
+    )
+
+
 class WorkspaceMembership(Base):
     """A human user's membership of a workspace, with role.
 

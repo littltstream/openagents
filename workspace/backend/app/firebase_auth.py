@@ -388,6 +388,10 @@ def verify_identity_token(token: str) -> Optional[str]:
     if no provider accepts the token. This is the provider-agnostic entry point
     new callers should use.
     """
+    if config.AUTH_MODE == "oidc":
+        from app.oidc_auth import verify_oidc_claims
+        claims = verify_oidc_claims(token)
+        return claims["email"] if claims else None
     if looks_like_workspace_session(token):
         claims = verify_workspace_session(token)
         return claims["email"] if claims else None
@@ -497,6 +501,9 @@ def verify_identity_claims(token: str) -> Optional[dict]:
     email, firebase_uid, apple_sub, display_name, provider (missing-provider
     ids are None), or None if neither provider accepts the token. This is the
     entry point for user-row resolution (app/access.py)."""
+    if config.AUTH_MODE == "oidc":
+        from app.oidc_auth import verify_oidc_claims
+        return verify_oidc_claims(token)
     if looks_like_workspace_session(token):
         return verify_workspace_session(token)
     claims = verify_firebase_claims(token)

@@ -41,7 +41,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import Session as SqlaSession
 
 from app.firebase_auth import verify_identity_claims
-from app.models import Node, User, Workspace, WorkspaceCollaborator, WorkspaceMembership
+from app.models import Node, User, UserIdentity, Workspace, WorkspaceCollaborator, WorkspaceMembership
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +122,8 @@ def get_or_create_user(db: Session, claims: dict) -> Optional[User]:
     display name on an existing row, and stamps last_login_at. Does NOT commit —
     the caller owns the transaction.
     """
+    if claims.get("provider") == "oidc":
+        return _get_or_create_oidc_user(db, claims)
     email = (claims.get("email") or "").strip().lower()
     if not email:
         return None
@@ -155,6 +157,38 @@ def get_or_create_user(db: Session, claims: dict) -> Optional[User]:
     if verified and not user.email_verified_at:
         user.email_verified_at = _now()
     user.last_login_at = _now()
+    return user
+
+
+def _get_or_create_oidc_user(db: Session, claims: dict) -> Optional[User]:
+    issuer, subject = claims.get("oidc_issuer"), claims.get("oidc_sub")
+    if not issuer or not subject or claims.get("email_verified") is not True:
+        return None
+    binding = db.get(UserIdentity, (issuer, subject))
+    if binding:
+        user = db.get(User, binding.user_id)
+        user.last_login_at = _now()
+        return user
+    # A verified address may claim an invitation or a pre-existing Firebase
+    # account, but a second subject cannot take over an already-bound account.
+    email = (claims.get("email") or "").strip().lower()
+    user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    if user and db.execute(select(UserIdentity).where(
+        UserIdentity.user_id == user.id, UserIdentity.issuer == issuer,
+    )).scalar_one_or_none():
+        return None
+    user = get_or_create_user(db, {**claims, "provider": "oidc_verified_email"})
+    if not user:
+        return None
+    db.flush()
+    try:
+        with db.begin_nested():
+            db.add(UserIdentity(issuer=issuer, subject=subject, user_id=user.id))
+            db.flush()
+    except IntegrityError:
+        winner = db.get(UserIdentity, (issuer, subject))
+        if not winner or winner.user_id != user.id:
+            return None
     return user
 
 
