@@ -35,7 +35,7 @@ Keycloak 使用独立的 PostgreSQL 服务和持久卷，不共用 Workspace 数
 
 ```bash
 docker compose --env-file .env.auth -f docker-compose.yml -f docker-compose.keycloak.yml build backend frontend
-docker compose --env-file .env.auth -f docker-compose.yml -f docker-compose.keycloak.yml run --rm --no-deps backend alembic upgrade head
+docker compose --env-file .env.auth -f docker-compose.yml -f docker-compose.keycloak.yml run --rm --no-deps --entrypoint alembic backend upgrade head
 docker compose --env-file .env.auth -f docker-compose.yml -f docker-compose.keycloak.yml up -d backend frontend
 ```
 
