@@ -43,6 +43,36 @@ def verify_smtp(smtp):
         raise RuntimeError(f'SMTP connection/authentication failed ({type(error).__name__})') from None
 
 
+def configure_mailer(api):
+    """A confidential realm-local service client; no human admin secret in the app."""
+    client_id = 'openagents-account-mailer'
+    clients = api('GET', '/clients', params={'clientId': client_id}).json()
+    if not clients:
+        api('POST', '/clients', json={
+            'clientId': client_id, 'enabled': True, 'protocol': 'openid-connect',
+            'publicClient': False, 'serviceAccountsEnabled': True, 'standardFlowEnabled': False,
+            'directAccessGrantsEnabled': False, 'fullScopeAllowed': False, 'defaultClientScopes': ['roles'],
+        })
+        clients = api('GET', '/clients', params={'clientId': client_id}).json()
+    if len(clients) != 1:
+        raise ValueError('Expected exactly one openagents-account-mailer client')
+    mailer = clients[0]['id']
+    api('PUT', '/clients/' + mailer, json={
+        'publicClient': False, 'serviceAccountsEnabled': True, 'standardFlowEnabled': False,
+        'directAccessGrantsEnabled': False, 'implicitFlowEnabled': False, 'fullScopeAllowed': False,
+        'defaultClientScopes': ['roles'],
+    })
+    management = api('GET', '/clients', params={'clientId': 'realm-management'}).json()
+    if len(management) != 1:
+        raise ValueError('Expected exactly one realm-management client')
+    management_id = management[0]['id']
+    role = api('GET', '/clients/' + management_id + '/roles/manage-users').json()
+    account = api('GET', '/clients/' + mailer + '/service-account-user').json()
+    api('POST', '/users/' + account['id'] + '/role-mappings/clients/' + management_id, json=[role])
+    api('POST', '/clients/' + mailer + '/scope-mappings/clients/' + management_id, json=[role])
+    return api('GET', '/clients/' + mailer + '/client-secret').json()['value']
+
+
 def configure(args):
     source = private_text(args.env_file)
     settings = dict(line.split('=', 1) for line in source.splitlines()
@@ -56,9 +86,9 @@ def configure(args):
             parsed_admin.scheme == 'http' and parsed_admin.hostname in ('localhost', '127.0.0.1')):
         raise ValueError('Admin access requires HTTPS or the server loopback interface')
     smtp = None
-    if args.enable_registration:
-        if not args.smtp_file:
-            raise ValueError('--enable-registration requires --smtp-file')
+    if args.enable_registration and not args.smtp_file:
+        raise ValueError('--enable-registration requires --smtp-file')
+    if args.smtp_file:
         smtp = load_smtp(args.smtp_file)
         verify_smtp(smtp)
 
@@ -80,17 +110,18 @@ def configure(args):
             return response
 
         realm = api('GET', '').json()
-        changes = {'verifyEmail': True, 'resetPasswordAllowed': False,
+        changes = {'verifyEmail': True, 'resetPasswordAllowed': smtp is not None,
                    'registrationAllowed': bool(args.enable_registration),
                    'passwordPolicy': realm.get('passwordPolicy') or 'length(8)'}
         if smtp is not None:
             changes['smtpServer'] = smtp
         api('PUT', '', json=changes)
-        # This is bounded by the actual SSO session lifetime. A signed-out user
-        # must still log in; a signed-in user need not re-enter the old password.
+        # Remove the previous direct-SSO password override. The application now
+        # sends an execute-actions email; a bare AIA cannot overwrite via SSO.
         password_config = api('GET', '/authentication/required-actions/UPDATE_PASSWORD/config').json()
-        password_config['config']['max_auth_age'] = str(2**31 - 1)
+        password_config['config']['max_auth_age'] = '0'
         api('PUT', '/authentication/required-actions/UPDATE_PASSWORD/config', json=password_config)
+        mailer_secret = configure_mailer(api) if smtp is not None else settings.get('OIDC_MAILER_CLIENT_SECRET', '')
         clients = api('GET', '/clients', params={'clientId': 'openagents-workspace'}).json()
         if len(clients) != 1:
             raise ValueError('Expected exactly one openagents-workspace client')
@@ -101,14 +132,18 @@ def configure(args):
         configured = api('GET', '').json()
         if configured['verifyEmail'] is not True or configured['registrationAllowed'] is not bool(args.enable_registration):
             raise RuntimeError('Keycloak did not retain the requested registration policy')
-        if api('GET', '/authentication/required-actions/UPDATE_PASSWORD/config').json()['config']['max_auth_age'] != str(2**31 - 1):
+        if api('GET', '/authentication/required-actions/UPDATE_PASSWORD/config').json()['config']['max_auth_age'] != '0':
             raise RuntimeError('Keycloak did not retain the requested password update policy')
 
-    flag = 'OIDC_REGISTRATION_ENABLED=' + ('1' if args.enable_registration else '0')
-    lines = [line for line in source.splitlines() if not line.startswith('OIDC_REGISTRATION_ENABLED=')]
-    Path(args.env_file).write_text('\n'.join([*lines, flag]) + '\n', encoding='utf-8')
+    updates = {
+        'OIDC_REGISTRATION_ENABLED': '1' if args.enable_registration else '0',
+        'OIDC_PASSWORD_EMAIL_ENABLED': '1' if smtp is not None else '0',
+        'OIDC_MAILER_CLIENT_SECRET': mailer_secret,
+    }
+    lines = [line for line in source.splitlines() if line.split('=', 1)[0] not in updates]
+    Path(args.env_file).write_text('\n'.join([*lines, *(key + '=' + value for key, value in updates.items())]) + '\n', encoding='utf-8')
     print('Keycloak configured: verified-email registration ' + ('enabled' if args.enable_registration else 'closed'))
-    print('Current-session password updates enabled; no email or old-password prompt')
+    print('Password changes require an emailed action link; email service ' + ('enabled' if smtp is not None else 'not configured'))
     print('Rebuild the frontend to apply the registration flag and public origin')
 
 

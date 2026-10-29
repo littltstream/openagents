@@ -45,6 +45,11 @@ services:
       OIDC_ISSUER_URL: ${KEYCLOAK_PUBLIC_URL}/realms/openagents
       OIDC_CLIENT_ID: openagents-workspace
       OIDC_JWKS_URL: http://keycloak:8080/realms/openagents/protocol/openid-connect/certs
+      OIDC_ADMIN_REALM_URL: http://keycloak:8080/realms/openagents
+      OIDC_MAILER_CLIENT_ID: openagents-account-mailer
+      OIDC_MAILER_CLIENT_SECRET: ${OIDC_MAILER_CLIENT_SECRET:-}
+      OIDC_PASSWORD_EMAIL_ENABLED: ${OIDC_PASSWORD_EMAIL_ENABLED:-0}
+      OIDC_PASSWORD_RESET_REDIRECT_URI: ${WORKSPACE_WEB_ORIGIN}/
       CORS_ORIGINS: ${WORKSPACE_WEB_ORIGIN}
     depends_on:
       keycloak:

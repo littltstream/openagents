@@ -1548,6 +1548,7 @@ export const messages: Messages = {
     registrationHint: '注册后请验证邮箱，验证完成即可访问你的工作区。',
     registrationClosed: '暂未开放自助注册。',
     changePassword: '修改密码',
+    passwordEmailSent: '密码重置邮件已发送，请在 15 分钟内通过邮件链接设置新密码。',
     signInTitle: '登录 OpenAgents',
     signInBody: '登录后即可查看你的工作区。',
     signingIn: '正在登录…',

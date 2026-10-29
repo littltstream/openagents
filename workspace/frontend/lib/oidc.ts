@@ -1,4 +1,5 @@
 import type Keycloak from 'keycloak-js';
+import { getApiBaseUrl } from './api-base';
 
 let clientPromise: Promise<Keycloak> | undefined;
 
@@ -46,13 +47,18 @@ export async function registerWithOidc(): Promise<void> {
   await client.register({ redirectUri: window.location.href });
 }
 
-/** Keycloak writes the password for the current SSO identity, without email. */
+/** Send an email for this identity; the password form requires its action link. */
 export async function changePasswordWithOidc(): Promise<void> {
-  const client = await getOidcClient();
-  if (!client.authenticated) throw new Error('Sign in before changing your password');
-  await client.login({
-    action: 'UPDATE_PASSWORD', redirectUri: window.location.href, scope: 'openid email profile',
+  const identity = await getOidcIdentity();
+  if (!identity) throw new Error('Sign in before changing your password');
+  const response = await fetch(getApiBaseUrl() + '/v1/auth/password-reset-email', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + identity.token },
+    body: '{}',
   });
+  const result = await response.json();
+  if (!response.ok || result.code !== 0 || result.data?.emailSent !== true) {
+    throw new Error(result.message || `Password reset email failed (${response.status})`);
+  }
 }
 
 export async function signOutWithOidc(): Promise<void> {

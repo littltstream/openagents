@@ -7,6 +7,7 @@ import { changePasswordWithOidc, registerWithOidc } from '@/lib/oidc';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
+import { toast } from 'sonner';
 import {
   Plus, LogOut, Clock, Loader2, KeyRound,
   Copy, Check, ArrowRight,
@@ -743,6 +744,7 @@ function MembershipHome({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ErrorMessage | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [sendingPasswordEmail, setSendingPasswordEmail] = useState(false);
   const [newName, setNewName] = useState('');
 
   const viewTrackedRef = useRef(false);
@@ -916,7 +918,13 @@ function MembershipHome({
                 <span className="text-sm text-neutral-600 hidden sm:inline">{userEmail}</span>
               </div>
               {usesOidcLogin() && <button
-                onClick={() => { void changePasswordWithOidc().catch((error: unknown) => setError({ text: error instanceof Error ? error.message : t('auth.signInFailed') })); }}
+                disabled={sendingPasswordEmail}
+                onClick={() => {
+                  setSendingPasswordEmail(true);
+                  void changePasswordWithOidc().then(() => toast.success(t('auth.passwordEmailSent')))
+                    .catch((error: unknown) => setError({ text: error instanceof Error ? error.message : t('auth.signInFailed') }))
+                    .finally(() => setSendingPasswordEmail(false));
+                }}
                 title={t('auth.changePassword')}
                 aria-label={t('auth.changePassword')}
                 className="inline-flex size-8 items-center justify-center rounded-md border-2 border-black bg-white text-neutral-700 transition-all hover:bg-neutral-100 hover:shadow-[2px_2px_0_0_#000]"

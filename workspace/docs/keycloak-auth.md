@@ -70,8 +70,11 @@ docker compose --env-file .env.auth -f docker-compose.yml -f docker-compose.keyc
 
 配置脚本默认通过服务器回环地址 `http://127.0.0.1:8180` 访问管理接口；如端口不同，
 显式设置 `--admin-url`。远程管理地址必须使用 HTTPS，自签名部署可用 `--ca-cert`
-指定证书。脚本只修改 `openagents` realm、Workspace client 和
-`OIDC_REGISTRATION_ENABLED` 构建开关，不输出授权码或管理员 token。
+指定证书。脚本修改 `openagents` realm、Workspace client，并创建用于当前 realm 发信的
+`openagents-account-mailer` 服务账号。它将私密 client secret 写入 `.env.auth`，
+同时设置注册和改密邮件开关，不输出授权码、client secret 或管理员 token。
+后端只持有此服务账号凭证，不持有人类管理员密码；凭证具有 realm 的 `manage-users`
+权限，应与数据库密码一样保护。应用接口仅允许已验证的当前登录者请求自己的邮件。
 SMTP 验证失败会中止，不能将其当作邮件发送成功。
 
 注册表单由 Keycloak 提供。用户完成验证邮件中的操作后才能进入 Workspace；
@@ -80,13 +83,18 @@ SMTP 验证失败会中止，不能将其当作邮件发送成功。
 ### 登录后修改自己的密码
 
 工作区列表右上角的钥匙按钮，以及工作区内的用户菜单，均提供“修改密码”。
-通过 Keycloak 的 `UPDATE_PASSWORD` 动作设置新密码和确认密码，直接更新当前
-SSO 用户的密码，不要求输入旧密码，也不发送邮件。没有登录会话时仍须先登录，
-不能指定他人的用户名或邮箱来修改其密码。新密码遵守 realm 的密码策略。
+点击后，后端核验当前 OIDC 身份，再由 Keycloak 向该账号已验证的邮箱发送
+`UPDATE_PASSWORD` 操作链接，有效期 15 分钟。用户打开邮件链接后设置新密码和
+确认密码。发信失败会明确报错，不会打开直接覆盖密码的表单；每账号请求间隔至少
+一分钟。请求体不接受邮箱、用户 ID 或新密码。
 
-`configure_auth.py` 将该动作的 `max_auth_age` 设为有符号 32 位整数最大值，
-因此在有效 SSO 会话内不额外要求重新输入旧密码；SSO 本身的有效期继续生效。
-忘记密码且无法登录时，暂由管理员重置。
+`configure_auth.py --smtp-file ...` 启用邮件功能，并恢复 `max_auth_age=0`，移除之前
+仅凭 SSO 直接覆盖密码的配置。配置 SMTP 后，Keycloak 登录页也提供“忘记密码”。
+改密邮件使用的回跳地址固定为配置的前端根地址，新密码遵守 realm 的密码策略。
+
+同一账号可以在多台设备同时登录，各设备拥有独立会话，不会因另一设备登录而被
+强制退出。不要在 Keycloak 的 browser flow 中添加单会话限制。普通退出结束当前
+浏览器会话；需要统一撤销时，可由管理员在 Keycloak 管理该用户的所有会话。
 
 访问 Keycloak 管理后台，使用 `.env.auth` 中的初始管理员登录。在 `openagents` realm
 的 Users 中创建用户，填写真实邮箱、设置初始密码，可要求首次登录修改密码。

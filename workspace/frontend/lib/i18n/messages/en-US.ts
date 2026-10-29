@@ -1582,6 +1582,7 @@ export const messages = {
     registrationHint: 'Verify your email address after registering to access your workspaces.',
     registrationClosed: 'Self-registration is not open yet.',
     changePassword: 'Change password',
+    passwordEmailSent: 'Password reset email sent. Follow the link within 15 minutes to set a new password.',
     signInTitle: 'Sign in to OpenAgents',
     signInBody: 'Sign in to see your workspaces.',
     signingIn: 'Signing you in…',

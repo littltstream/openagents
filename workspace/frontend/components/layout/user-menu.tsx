@@ -47,6 +47,7 @@ const THEME_OPTIONS = [
 ] as const;
 
 export function UserMenu({ side, align = 'end' }: UserMenuProps = {}) {
+  const [sendingPasswordEmail, setSendingPasswordEmail] = useState(false);
   const { workspace, token } = useWorkspace();
   const { user, isOpenAgentsDomain, signIn, signOut } = useOpenAgentsAuth();
   const me = useMe(workspace?.slug || workspace?.workspaceId);
@@ -159,8 +160,11 @@ export function UserMenu({ side, align = 'end' }: UserMenuProps = {}) {
           )}
 
           {usesOidcLogin() && user && (
-            <DropdownMenuItem onClick={() => {
-              void changePasswordWithOidc().catch((error: unknown) => toast.error(error instanceof Error ? error.message : t('auth.signInFailed')));
+            <DropdownMenuItem disabled={sendingPasswordEmail} onClick={() => {
+              setSendingPasswordEmail(true);
+              void changePasswordWithOidc().then(() => toast.success(t('auth.passwordEmailSent')))
+                .catch((error: unknown) => toast.error(error instanceof Error ? error.message : t('auth.signInFailed')))
+                .finally(() => setSendingPasswordEmail(false));
             }}>
               <KeyRound />
               {t('auth.changePassword')}

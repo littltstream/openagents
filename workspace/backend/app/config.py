@@ -24,6 +24,11 @@ class Config:
     OIDC_CLIENT_ID: str = os.environ.get("OIDC_CLIENT_ID", "openagents-workspace")
     # May use the private Docker address while tokens retain the public issuer.
     OIDC_JWKS_URL: str = os.environ.get("OIDC_JWKS_URL", "")
+    OIDC_ADMIN_REALM_URL: str = os.environ.get("OIDC_ADMIN_REALM_URL", "").rstrip("/")
+    OIDC_MAILER_CLIENT_ID: str = os.environ.get("OIDC_MAILER_CLIENT_ID", "openagents-account-mailer")
+    OIDC_MAILER_CLIENT_SECRET: str = os.environ.get("OIDC_MAILER_CLIENT_SECRET", "")
+    OIDC_PASSWORD_EMAIL_ENABLED: bool = os.environ.get("OIDC_PASSWORD_EMAIL_ENABLED", "0").lower() in ("1", "true")
+    OIDC_PASSWORD_RESET_REDIRECT_URI: str = os.environ.get("OIDC_PASSWORD_RESET_REDIRECT_URI", "")
 
     # Firebase (used for user login on workspace.openagents.org).
     #

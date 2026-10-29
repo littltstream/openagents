@@ -16,6 +16,59 @@ from tests.conftest import TestingSessionLocal
 
 
 @pytest.fixture
+def password_mail(monkeypatch):
+    from app.routers import auth
+    auth._password_email_cooldowns.clear()
+    calls = []
+    monkeypatch.setattr(auth.oidc_password_email, 'send_password_reset_email', calls.append)
+    yield calls
+    auth._password_email_cooldowns.clear()
+
+
+def test_password_email_targets_only_verified_subject_and_limits_repeats(oidc, client, password_mail):
+    headers = {'Authorization': 'Bearer ' + oidc()}
+    response = client.post('/v1/auth/password-reset-email', json={}, headers=headers)
+    assert response.status_code == 200
+    assert response.json()['data'] == {'emailSent': True, 'expiresIn': 900}
+    assert password_mail == ['person-1']
+    assert client.post('/v1/auth/password-reset-email', json={}, headers=headers).status_code == 429
+    assert password_mail == ['person-1']
+
+
+def test_password_email_rejects_missing_identity_and_unverified_email(oidc, client, password_mail):
+    assert client.post('/v1/auth/password-reset-email', json={}).status_code == 401
+    headers = {'Authorization': 'Bearer ' + oidc(email_verified=False)}
+    assert client.post('/v1/auth/password-reset-email', json={}, headers=headers).status_code == 401
+    assert password_mail == []
+
+
+def test_password_email_rejects_caller_supplied_recipient(oidc, client, password_mail):
+    response = client.post('/v1/auth/password-reset-email', json={'email': 'another@example.test'},
+                           headers={'Authorization': 'Bearer ' + oidc()})
+    assert response.status_code == 422
+    assert password_mail == []
+
+
+def test_password_email_failure_is_not_reported_as_sent(oidc, client, password_mail, monkeypatch):
+    from app.routers import auth
+    def failed(subject):
+        raise auth.oidc_password_email.PasswordEmailUnavailable('Mail service unavailable')
+    monkeypatch.setattr(auth.oidc_password_email, 'send_password_reset_email', failed)
+    headers = {'Authorization': 'Bearer ' + oidc()}
+    response = client.post('/v1/auth/password-reset-email', json={}, headers=headers)
+    assert response.status_code == 503
+    assert response.json().get('data') is None
+    monkeypatch.setattr(auth.oidc_password_email, 'send_password_reset_email', password_mail.append)
+    assert client.post('/v1/auth/password-reset-email', json={}, headers=headers).status_code == 200
+
+
+def test_password_email_is_unavailable_in_other_auth_modes(oidc, client, password_mail, monkeypatch):
+    monkeypatch.setattr(config, 'AUTH_MODE', 'workspace_token')
+    assert client.post('/v1/auth/password-reset-email', json={}).status_code == 404
+    assert password_mail == []
+
+
+@pytest.fixture
 def oidc(monkeypatch):
     monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1")
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)

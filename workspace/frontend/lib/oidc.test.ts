@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ client: {
+const mocks = vi.hoisted(() => ({ fetch: vi.fn(), client: {
   init: vi.fn(), updateToken: vi.fn(), login: vi.fn(), logout: vi.fn(), register: vi.fn(),
   authenticated: true, token: 'access-token',
   tokenParsed: { email: 'owner@example.test', email_verified: true, name: 'Owner' },
@@ -12,6 +12,9 @@ beforeEach(() => {
   vi.stubEnv('NEXT_PUBLIC_KEYCLOAK_URL', 'https://auth.example.test');
   vi.stubEnv('NEXT_PUBLIC_KEYCLOAK_REALM', 'openagents');
   vi.stubEnv('NEXT_PUBLIC_KEYCLOAK_CLIENT_ID', 'openagents-workspace');
+  vi.stubEnv('NEXT_PUBLIC_API_URL', 'https://api.example.test');
+  vi.stubGlobal('fetch', mocks.fetch);
+  mocks.fetch.mockResolvedValue({ ok: true, status: 200, json: async () => ({ code: 0, data: { emailSent: true } }) });
   vi.stubGlobal('window', { location: { origin: 'https://workspace.example.test', href: 'https://workspace.example.test/invite/abc' } });
   mocks.client.authenticated = true;
   mocks.client.tokenParsed.email_verified = true;
@@ -63,17 +66,26 @@ it('opens self-registration without losing the return destination', async () => 
   expect(mocks.client.register).toHaveBeenCalledWith({ redirectUri: window.location.href });
 });
 
-it('requests a password update for the signed-in SSO identity', async () => {
+it('requests an email for the signed-in identity without any caller-supplied recipient', async () => {
   const { changePasswordWithOidc } = await import('./oidc');
   await changePasswordWithOidc();
-  expect(mocks.client.login).toHaveBeenCalledWith({
-    action: 'UPDATE_PASSWORD', redirectUri: window.location.href, scope: 'openid email profile',
+  expect(mocks.fetch).toHaveBeenCalledWith('https://api.example.test/v1/auth/password-reset-email', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer access-token' }, body: '{}',
   });
+  expect(mocks.client.login).not.toHaveBeenCalled();
 });
 
 it('does not offer a password update without an authenticated session', async () => {
   mocks.client.authenticated = false;
   const { changePasswordWithOidc } = await import('./oidc');
   await expect(changePasswordWithOidc()).rejects.toThrow('Sign in before');
+  expect(mocks.client.login).not.toHaveBeenCalled();
+  expect(mocks.fetch).not.toHaveBeenCalled();
+});
+
+it('surfaces delivery failure without opening a direct password form', async () => {
+  mocks.fetch.mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({ message: 'Mail service unavailable' }) });
+  const { changePasswordWithOidc } = await import('./oidc');
+  await expect(changePasswordWithOidc()).rejects.toThrow('Mail service unavailable');
   expect(mocks.client.login).not.toHaveBeenCalled();
 });
