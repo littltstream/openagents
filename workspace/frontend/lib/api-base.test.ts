@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getApiBaseUrl } from './api-base';
+import { getApiBaseUrl, getDirectApiBaseUrl } from './api-base';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -33,5 +33,16 @@ describe('workspace API transport', () => {
   it('keeps server-side resolution absolute', () => {
     vi.stubGlobal('window', undefined);
     expect(getApiBaseUrl('')).toBe('https://workspace-endpoint.openagents.org');
+  });
+
+  it('gives external CLI clients an absolute endpoint even when the web uses a proxy', () => {
+    vi.stubGlobal('window', { location: { protocol: 'https:' } });
+    expect(getApiBaseUrl('')).toBe('/wsapi');
+    expect(getDirectApiBaseUrl('')).toBe('https://workspace-endpoint.openagents.org');
+  });
+
+  it('preserves the self-hosted CLI endpoint port and base path', () => {
+    expect(getDirectApiBaseUrl('https://101.43.200.65:8000/')).toBe('https://101.43.200.65:8000');
+    expect(getDirectApiBaseUrl('https://workspace.example/api/')).toBe('https://workspace.example/api');
   });
 });

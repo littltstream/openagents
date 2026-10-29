@@ -11,6 +11,7 @@ import { useTokenPayModels } from '@/hooks/use-tokenpay-models';
 import { useRetryingLoad } from '@/hooks/use-retrying-load';
 import { useT, useFormatters } from '@/lib/i18n';
 import { workspaceApi } from '@/lib/api';
+import { getDirectApiBaseUrl } from '@/lib/api-base';
 import { deviceNameClash, nodeCommandErrorKey } from '@/lib/node-command-error';
 import { desktopHost } from '@/lib/desktop-host';
 import { AgentSharingButton } from '@/components/sharing/agent-sharing-button';
@@ -714,7 +715,7 @@ function PairingPanel({
           </button>
           <p className="text-xs text-muted-foreground">{t('connect.nodeStep2Hint')}</p>
           <p className="text-xs text-muted-foreground">{t('connect.nodeCliPairingHint')}</p>
-          <CommandRow command={`agn device connect ${pairing.code}`} />
+          <CommandRow command={`agn device connect ${pairing.code} --endpoint "${getDirectApiBaseUrl()}"`} />
           {isMobile && (
             <p className="text-xs text-muted-foreground">{t('connect.nodeMobileCodeHint')}</p>
           )}
