@@ -50,7 +50,16 @@ services:
       OIDC_MAILER_CLIENT_SECRET: ${OIDC_MAILER_CLIENT_SECRET:-}
       OIDC_PASSWORD_EMAIL_ENABLED: ${OIDC_PASSWORD_EMAIL_ENABLED:-0}
       OIDC_PASSWORD_RESET_REDIRECT_URI: ${WORKSPACE_WEB_ORIGIN}/
+      FRONTEND_BASE_URL: ${WORKSPACE_WEB_ORIGIN}
+      SMTP_CONFIG_FILE: ${WORKSPACE_SMTP_CONFIG_FILE:+/run/secrets/workspace-smtp.json}
       CORS_ORIGINS: ${WORKSPACE_WEB_ORIGIN}
+    volumes:
+      - type: bind
+        source: ${WORKSPACE_SMTP_CONFIG_FILE:-./keycloak/smtp.example.json}
+        target: /run/secrets/workspace-smtp.json
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       keycloak:
         condition: service_started

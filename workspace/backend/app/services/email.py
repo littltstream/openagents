@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Transactional email via Resend (https://resend.com/docs/api-reference).
+"""Transactional email via configured SMTP, or the existing Resend provider.
 
-One tiny wrapper instead of an SMTP stack: a single HTTPS POST, keyed by
-RESEND_API_KEY. When no key is configured every send becomes a logged no-op —
-callers report `emailSent: false` and fall back to copy-the-link flows, so
-invites still work on self-hosted deployments with no email provider.
+Callers receive emailSent=False when delivery is unavailable or fails;
+creating an invitation link remains independent of email delivery.
 """
 
 import html
+import json
 import logging
+from email.headerregistry import Address
+from email.message import EmailMessage
+from pathlib import Path
+import smtplib
+import ssl
 
 import httpx
 
@@ -20,7 +24,44 @@ RESEND_URL = "https://api.resend.com/emails"
 
 
 def email_configured() -> bool:
-    return bool(config.RESEND_API_KEY)
+    return bool(config.SMTP_CONFIG_FILE or config.RESEND_API_KEY)
+
+
+def _send_smtp(to: str, subject: str, html_body: str) -> bool:
+    try:
+        smtp = json.loads(Path(config.SMTP_CONFIG_FILE).read_text(encoding='utf-8'))
+        if not isinstance(smtp, dict):
+            raise ValueError('SMTP settings must be a JSON object')
+        for field in ('host', 'port', 'from', 'user', 'password'):
+            if not isinstance(smtp.get(field), str) or not smtp[field].strip():
+                raise ValueError('Missing SMTP setting')
+        implicit_tls = smtp.get('ssl') == 'true'
+        starttls = smtp.get('starttls') == 'true'
+        if smtp.get('auth') != 'true' or implicit_tls == starttls:
+            raise ValueError('Authenticated SMTP requires exactly one TLS mode')
+        message = EmailMessage()
+        message['From'] = Address(display_name=smtp.get('fromDisplayName', ''), addr_spec=smtp['from'])
+        message['To'] = to
+        message['Subject'] = subject
+        message.set_content(html_body, subtype='html')
+        context = ssl.create_default_context()
+        if implicit_tls:
+            connection = smtplib.SMTP_SSL(smtp['host'], int(smtp['port']), timeout=15, context=context)
+        else:
+            connection = smtplib.SMTP(smtp['host'], int(smtp['port']), timeout=15)
+        with connection:
+            if starttls:
+                connection.starttls(context=context)
+            connection.login(smtp['user'], smtp['password'])
+            refused = connection.send_message(message, from_addr=smtp['from'], to_addrs=[to])
+            if refused:
+                logger.warning('email: SMTP recipient refused')
+                return False
+        return True
+    except (smtplib.SMTPException, OSError, ValueError, TypeError) as error:
+        # Do not log provider bodies, credentials, or invitation links.
+        logger.warning('email: SMTP delivery failed (%s)', type(error).__name__)
+        return False
 
 
 def send_email(to: str, subject: str, html_body: str) -> bool:
@@ -29,8 +70,10 @@ def send_email(to: str, subject: str, html_body: str) -> bool:
     Never raises — invite creation must succeed even when the provider is
     down or unconfigured.
     """
+    if config.SMTP_CONFIG_FILE:
+        return _send_smtp(to, subject, html_body)
     if not email_configured():
-        logger.info("email: RESEND_API_KEY not set, skipping send to %s (%s)", to, subject)
+        logger.info("email: no delivery provider configured")
         return False
     try:
         resp = httpx.post(

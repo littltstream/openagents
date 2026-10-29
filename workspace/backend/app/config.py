@@ -179,11 +179,12 @@ class Config:
     )
 
     # Invitations & transactional email. Invite links point at the workspace
-    # frontend; email delivery goes through Resend when a key is configured
-    # (otherwise invites are created but the email step is skipped).
+    # frontend; SMTP uses a private mounted JSON file. Without SMTP, the
+    # existing Resend configuration remains supported.
     FRONTEND_BASE_URL: str = os.environ.get("FRONTEND_BASE_URL", "https://workspace.openagents.org")
     RESEND_API_KEY: str = os.environ.get("RESEND_API_KEY", "")
     EMAIL_FROM: str = os.environ.get("EMAIL_FROM", "OpenAgents <noreply@openagents.org>")
+    SMTP_CONFIG_FILE: str = os.environ.get("SMTP_CONFIG_FILE", "")
     INVITE_TTL_DAYS: int = int(os.environ.get("INVITE_TTL_DAYS", "7"))
 
     # Server-side product analytics (PostHog). Authoritative funnel

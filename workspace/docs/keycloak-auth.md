@@ -77,6 +77,16 @@ docker compose --env-file .env.auth -f docker-compose.yml -f docker-compose.keyc
 权限，应与数据库密码一样保护。应用接口仅允许已验证的当前登录者请求自己的邮件。
 SMTP 验证失败会中止，不能将其当作邮件发送成功。
 
+该私有 SMTP JSON 同时通过只读文件挂载提供给 Workspace 后端，用于成员邀请和
+设置提醒邮件；后台不从 Keycloak 导出 SMTP 密码。`WORKSPACE_SMTP_CONFIG_FILE`
+由配置脚本写入 `.env.auth`，更新后需通过上面的 `up -d --no-build` 重建后端容器。
+没有配置 SMTP 时仍支持原有 Resend 设置；已选 SMTP 发送失败时不会切换服务商。
+邀请创建成功与邮件发送成功分别记录，只有 SMTP 接受邮件才返回 `emailSent: true`。
+
+认证 overlay 将 `FRONTEND_BASE_URL` 设为 `WORKSPACE_WEB_ORIGIN`，因此邀请链接
+和邮件链接都指向自己的前端。已有邀请在列表中也会显示更新后的前端地址；已经发出的
+旧邮件无法修改，需要重新复制链接或发送邀请。
+
 注册表单由 Keycloak 提供。用户完成验证邮件中的操作后才能进入 Workspace；
 未验证邮箱的 token 继续被前后端拒绝。默认不开启按未验证邮箱合并账号。
 

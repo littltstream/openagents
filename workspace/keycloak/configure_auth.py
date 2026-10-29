@@ -139,6 +139,7 @@ def configure(args):
         'OIDC_REGISTRATION_ENABLED': '1' if args.enable_registration else '0',
         'OIDC_PASSWORD_EMAIL_ENABLED': '1' if smtp is not None else '0',
         'OIDC_MAILER_CLIENT_SECRET': mailer_secret,
+        'WORKSPACE_SMTP_CONFIG_FILE': str(Path(args.smtp_file).resolve()) if smtp is not None else '',
     }
     lines = [line for line in source.splitlines() if line.split('=', 1)[0] not in updates]
     Path(args.env_file).write_text('\n'.join([*lines, *(key + '=' + value for key, value in updates.items())]) + '\n', encoding='utf-8')
