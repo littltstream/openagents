@@ -55,6 +55,11 @@ docker compose --env-file .env.auth -f docker-compose.yml -f docker-compose.keyc
 不会自动归新账号所有；通过现有邀请/成员管理流程明确授权。登录本身不授予其他
 Workspace 的权限。以已授权成员身份访问“连接设备”即可创建配对码。
 
+Web 入口使用部署的前端根地址 `/`。Keycloak 登录后，即使账号只有一个工作区，
+也会显示“你的工作区”列表，可选择已有工作区或新建更多工作区；进入工作区后，
+可通过用户菜单的“切换工作区”返回。显式打开 `/<slug>` 分享链接时仍进入该工作区，
+并验证当前账号是否有访问权限。
+
 Keycloak 的 Identity Providers -> GitHub 可配置你自己的 GitHub OAuth 应用；用户
 通过 Keycloak Account Console 将 GitHub 绑定到同一账号。不要开启按未验证邮箱
 自动合并账号。短信登录需额外认证扩展及短信网关，本实现没有添加。

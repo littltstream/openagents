@@ -827,11 +827,13 @@ function MembershipHome({
   const firstWorkspace =
     !loading && workspaces.length === 1 && workspaces[0].role === 'owner' ? workspaces[0] : null;
 
-  // Single-workspace users go STRAIGHT IN — no picker, no "this is your first
+  // Self-hosted OIDC accounts always see the picker, even with one workspace.
+  // Single-workspace users on the hosted app go STRAIGHT IN — no picker, no "this is your first
   // workspace" card. A list with one option is pure friction (especially on a
   // phone). Once per browser session, so deliberately navigating back to the
   // home page still shows the list (rename/delete/create live here).
   const willAutoEnter =
+    !usesOidcLogin() &&
     !!firstWorkspace &&
     typeof window !== 'undefined' &&
     sessionStorage.getItem('oa_auto_entered_first_ws') !== '1';
