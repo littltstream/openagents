@@ -26,6 +26,8 @@ import { canAdminister } from '@/components/settings/admin-context';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useOpenAgentsAuth } from '@/lib/openagents-auth-context';
 import { goToCentralLogin, goToCentralLogout } from '@/lib/auth-redirects';
+import { usesOidcLogin } from '@/lib/auth-mode';
+import { changePasswordWithOidc } from '@/lib/oidc';
 import { useT } from '@/lib/i18n';
 import { currentRouteSearch } from '@/lib/route-search';
 import { LanguageMenuSub } from './language-menu';
@@ -154,6 +156,15 @@ export function UserMenu({ side, align = 'end' }: UserMenuProps = {}) {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
             </>
+          )}
+
+          {usesOidcLogin() && user && (
+            <DropdownMenuItem onClick={() => {
+              void changePasswordWithOidc().catch((error: unknown) => toast.error(error instanceof Error ? error.message : t('auth.signInFailed')));
+            }}>
+              <KeyRound />
+              {t('auth.changePassword')}
+            </DropdownMenuItem>
           )}
 
           <DropdownMenuSub>

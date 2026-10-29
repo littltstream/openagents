@@ -1544,6 +1544,10 @@ export const messages: Messages = {
   },
 
   auth: {
+    register: '注册账号',
+    registrationHint: '注册后请验证邮箱，验证完成即可访问你的工作区。',
+    registrationClosed: '暂未开放自助注册。',
+    changePassword: '修改密码',
     signInTitle: '登录 OpenAgents',
     signInBody: '登录后即可查看你的工作区。',
     signingIn: '正在登录…',

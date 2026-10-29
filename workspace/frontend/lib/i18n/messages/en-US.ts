@@ -1578,6 +1578,10 @@ export const messages = {
 
   /** Sign-in gate on the home page, the login callback and the desktop sign-in landing. */
   auth: {
+    register: 'Create an account',
+    registrationHint: 'Verify your email address after registering to access your workspaces.',
+    registrationClosed: 'Self-registration is not open yet.',
+    changePassword: 'Change password',
     signInTitle: 'Sign in to OpenAgents',
     signInBody: 'Sign in to see your workspaces.',
     signingIn: 'Signing you in…',

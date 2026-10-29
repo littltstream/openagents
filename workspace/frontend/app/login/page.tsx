@@ -4,6 +4,8 @@ import { useSearchParams } from 'next/navigation';
 import { useOpenAgentsAuth } from '@/lib/openagents-auth-context';
 import { useT } from '@/lib/i18n';
 import { Button } from '@/components/ui/button';
+import { allowsOidcRegistration, usesOidcLogin } from '@/lib/auth-mode';
+import { registerWithOidc } from '@/lib/oidc';
 
 function Login() {
   const t = useT();
@@ -23,6 +25,15 @@ function Login() {
       try { await signIn(); } catch (e) { setError(e instanceof Error ? e.message : t('workspaceGate.loadFailedTitle')); }
       finally { setBusy(false); }
     }}>{t('workspaceGate.logIn')}</Button>
+    {usesOidcLogin() && <>
+      <Button variant="outline" disabled={loading || busy || !allowsOidcRegistration()} onClick={async () => {
+        setBusy(true); setError('');
+        try { await registerWithOidc(); }
+        catch (e) { setError(e instanceof Error ? e.message : t('auth.signInFailed')); }
+        finally { setBusy(false); }
+      }}>{t('auth.register')}</Button>
+      <p className="max-w-md text-center text-sm text-muted-foreground">{t(allowsOidcRegistration() ? 'auth.registrationHint' : 'auth.registrationClosed')}</p>
+    </>}
     {(error || authError) && <p role="alert" className="text-sm text-destructive">{error || authError}</p>}
   </main>;
 }

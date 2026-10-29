@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ client: {
-  init: vi.fn(), updateToken: vi.fn(), login: vi.fn(), logout: vi.fn(),
+  init: vi.fn(), updateToken: vi.fn(), login: vi.fn(), logout: vi.fn(), register: vi.fn(),
   authenticated: true, token: 'access-token',
   tokenParsed: { email: 'owner@example.test', email_verified: true, name: 'Owner' },
 } }));
@@ -55,4 +55,25 @@ it('rejects incomplete configuration', async () => {
   const { getOidcClient } = await import('./oidc');
   await expect(getOidcClient()).rejects.toThrow('required');
   expect(mocks.client.init).not.toHaveBeenCalled();
+});
+
+it('opens self-registration without losing the return destination', async () => {
+  const { registerWithOidc } = await import('./oidc');
+  await registerWithOidc();
+  expect(mocks.client.register).toHaveBeenCalledWith({ redirectUri: window.location.href });
+});
+
+it('requests a password update for the signed-in SSO identity', async () => {
+  const { changePasswordWithOidc } = await import('./oidc');
+  await changePasswordWithOidc();
+  expect(mocks.client.login).toHaveBeenCalledWith({
+    action: 'UPDATE_PASSWORD', redirectUri: window.location.href, scope: 'openid email profile',
+  });
+});
+
+it('does not offer a password update without an authenticated session', async () => {
+  mocks.client.authenticated = false;
+  const { changePasswordWithOidc } = await import('./oidc');
+  await expect(changePasswordWithOidc()).rejects.toThrow('Sign in before');
+  expect(mocks.client.login).not.toHaveBeenCalled();
 });

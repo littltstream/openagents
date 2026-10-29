@@ -5,7 +5,9 @@
   "registrationAllowed": false,
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
-  "resetPasswordAllowed": true,
+  "resetPasswordAllowed": false,
+  "verifyEmail": true,
+  "passwordPolicy": "length(8)",
   "rememberMe": true,
   "sslRequired": "external",
   "clients": [

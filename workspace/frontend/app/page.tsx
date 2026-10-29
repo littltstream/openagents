@@ -1,13 +1,14 @@
 'use client';
 
 import { desktopHost } from '@/lib/desktop-host';
-import { usesInlineLogin, usesOidcLogin } from '@/lib/auth-mode';
+import { allowsOidcRegistration, usesInlineLogin, usesOidcLogin } from '@/lib/auth-mode';
+import { changePasswordWithOidc, registerWithOidc } from '@/lib/oidc';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import {
-  Plus, LogOut, Clock, Loader2,
+  Plus, LogOut, Clock, Loader2, KeyRound,
   Copy, Check, ArrowRight,
   Network, Zap, Shield, MonitorSmartphone,
 } from 'lucide-react';
@@ -914,6 +915,14 @@ function MembershipHome({
                 </div>
                 <span className="text-sm text-neutral-600 hidden sm:inline">{userEmail}</span>
               </div>
+              {usesOidcLogin() && <button
+                onClick={() => { void changePasswordWithOidc().catch((error: unknown) => setError({ text: error instanceof Error ? error.message : t('auth.signInFailed') })); }}
+                title={t('auth.changePassword')}
+                aria-label={t('auth.changePassword')}
+                className="inline-flex size-8 items-center justify-center rounded-md border-2 border-black bg-white text-neutral-700 transition-all hover:bg-neutral-100 hover:shadow-[2px_2px_0_0_#000]"
+              >
+                <KeyRound className="size-4" />
+              </button>}
               <button
                 onClick={handleSignOut}
                 title={t('userMenu.signOut')}
@@ -1064,6 +1073,12 @@ function SignInGate({ signIn }: { signIn: () => Promise<void> }) {
       <BrutalBtn onClick={() => { void signIn().catch((error: unknown) => setSignInError(error instanceof Error ? error.message : 'Sign-in failed')); }} color="blue">
         {desktopHost() || usesOidcLogin() ? t('auth.signInTitle') : t('workspaceGate.signInWithGoogle')}
       </BrutalBtn>
+      {usesOidcLogin() && <>
+        <BrutalBtn color="white" disabled={!allowsOidcRegistration()} onClick={() => { void registerWithOidc().catch((error: unknown) => setSignInError(error instanceof Error ? error.message : t('auth.signInFailed'))); }}>
+          {t('auth.register')}
+        </BrutalBtn>
+        <p className="max-w-md text-center text-sm text-neutral-600">{t(allowsOidcRegistration() ? 'auth.registrationHint' : 'auth.registrationClosed')}</p>
+      </>}
       {(authError || signInError) && <p role="alert" className="text-sm text-red-600">{authError || signInError}</p>}
     </div>
   );

@@ -26,6 +26,7 @@ docker compose --env-file .env.auth -f docker-compose.yml -f docker-compose.keyc
 Keycloak 使用独立的 PostgreSQL 服务和持久卷，不共用 Workspace 数据库账号。
 首次启动导入 `keycloak/openagents-realm.json`，创建 `openagents` realm 和
 `openagents-workspace` client；默认不开放自助注册，不导入任何用户或密码。
+注册必须验证邮箱，密码至少 8 位；未登录的邮件重置密码入口不启用。
 已有 realm 不会被重启时自动覆盖，后续改配置应使用管理后台。
 
 ### Workspace 数据库迁移
@@ -45,6 +46,47 @@ docker compose --env-file .env.auth -f docker-compose.yml -f docker-compose.keyc
 匿名 `.next` 卷，确保提供当前镜像中的构建。
 
 ## 账号管理
+
+### 自助注册与邮箱验证
+
+登录页提供“注册账号”入口。在配置发信服务前，入口明确显示“暂未开放自助注册”。
+发信账号应使用专用邮箱；不要使用私人邮箱承载系统通知。复制
+`keycloak/smtp.example.json` 到仓库外的服务器私有目录，填写 SMTP 地址、
+发件人、用户名和授权码，设置文件权限为 0600，不要提交该文件。
+QQ 邮箱使用 SMTP 授权码，不使用邮箱登录密码。
+
+从 `workspace` 目录执行（需要 Python requests，后端依赖中已包含）：
+
+```bash
+# 先配置已有 realm 的登录策略和前端 origin；不启用注册。
+python3 keycloak/configure_auth.py --env-file .env.auth
+# 专用邮箱准备好后，验证 SMTP 连接/认证并开启注册。
+python3 keycloak/configure_auth.py --env-file .env.auth \
+  --smtp-file /your/private/directory/smtp.json --enable-registration
+# 更新构建期注册开关及公网地址。
+docker compose --env-file .env.auth -f docker-compose.yml -f docker-compose.keycloak.yml build frontend
+docker compose --env-file .env.auth -f docker-compose.yml -f docker-compose.keycloak.yml up -d --no-build
+```
+
+配置脚本默认通过服务器回环地址 `http://127.0.0.1:8180` 访问管理接口；如端口不同，
+显式设置 `--admin-url`。远程管理地址必须使用 HTTPS，自签名部署可用 `--ca-cert`
+指定证书。脚本只修改 `openagents` realm、Workspace client 和
+`OIDC_REGISTRATION_ENABLED` 构建开关，不输出授权码或管理员 token。
+SMTP 验证失败会中止，不能将其当作邮件发送成功。
+
+注册表单由 Keycloak 提供。用户完成验证邮件中的操作后才能进入 Workspace；
+未验证邮箱的 token 继续被前后端拒绝。默认不开启按未验证邮箱合并账号。
+
+### 登录后修改自己的密码
+
+工作区列表右上角的钥匙按钮，以及工作区内的用户菜单，均提供“修改密码”。
+通过 Keycloak 的 `UPDATE_PASSWORD` 动作设置新密码和确认密码，直接更新当前
+SSO 用户的密码，不要求输入旧密码，也不发送邮件。没有登录会话时仍须先登录，
+不能指定他人的用户名或邮箱来修改其密码。新密码遵守 realm 的密码策略。
+
+`configure_auth.py` 将该动作的 `max_auth_age` 设为有符号 32 位整数最大值，
+因此在有效 SSO 会话内不额外要求重新输入旧密码；SSO 本身的有效期继续生效。
+忘记密码且无法登录时，暂由管理员重置。
 
 访问 Keycloak 管理后台，使用 `.env.auth` 中的初始管理员登录。在 `openagents` realm
 的 Users 中创建用户，填写真实邮箱、设置初始密码，可要求首次登录修改密码。

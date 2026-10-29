@@ -41,6 +41,20 @@ export async function signInWithOidc(): Promise<void> {
   await client.login({ redirectUri: window.location.href, scope: 'openid email profile' });
 }
 
+export async function registerWithOidc(): Promise<void> {
+  const client = await getOidcClient();
+  await client.register({ redirectUri: window.location.href });
+}
+
+/** Keycloak writes the password for the current SSO identity, without email. */
+export async function changePasswordWithOidc(): Promise<void> {
+  const client = await getOidcClient();
+  if (!client.authenticated) throw new Error('Sign in before changing your password');
+  await client.login({
+    action: 'UPDATE_PASSWORD', redirectUri: window.location.href, scope: 'openid email profile',
+  });
+}
+
 export async function signOutWithOidc(): Promise<void> {
   const client = await getOidcClient();
   await client.logout({ redirectUri: window.location.origin + '/login' });
