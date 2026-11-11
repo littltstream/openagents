@@ -5,11 +5,11 @@
  * so the adapter itself stays a thin subprocess driver. The split mirrors
  * cline-stream.js / pi-stream.js.
  *
- * Verified against @deepseek-ai/dsh 0.2.1-rc.2 (bin `dsh` -> lib/bin.js, ESM).
+ * Verified against @deepseek-ai/dsh 0.2.1-rc.5 (bin `dsh` -> lib/bin.js, ESM).
  *
  * Three things here exist because dsh is unlike every other CLI in this repo:
  *
- *  1. It is a PREVIEW release (`0.2.1-rc.2`) and upstream says compatibility may
+ *  1. It is a PREVIEW release (`0.2.1-rc.5`) and upstream says compatibility may
  *     break between previews, so the gate is exact equality — not a floor. The
  *     two version comparators already in this repo (installer.js's
  *     `compareVersions`, pi-stream.js's `parseVersion`) both DROP the `-rc.N`
@@ -45,7 +45,7 @@ const path = require('path');
  * from there and only falls back here when the registry entry cannot be read at
  * all. Mirrors pi-stream.js's MIN_PI_VERSION rationale.
  */
-const SUPPORTED_DSH_VERSION = '0.2.1-rc.2';
+const SUPPORTED_DSH_VERSION = '0.2.1-rc.5';
 
 /**
  * dsh's Node requirement, from the upstream repository's root package.json:
@@ -66,9 +66,32 @@ const NODE_MIN_22 = [22, 19, 0];
 const ROW = {
   AGENT_DEFAULT_MODEL: 'agent-default-model',
   APPROVAL: 'approval',
+  LLM_DEEPSEEK: 'llm-deepseek',
+  LLM_PI_AI: 'llm-pi-ai',
   PERMISSION: 'permission',
   USER_QUESTIONS: 'user-questions',
 };
+
+/**
+ * The models dsh's own DeepSeek catalog ships (`DEFAULT_MODELS` in
+ * @deepseek-ai/dsh-llm-deepseek). From rc.5, while that catalog is untouched,
+ * dsh follows the official `/models` listing and refuses any listed model not
+ * in it — `deepseek-v4-flash`, the id OpenAgents offers, among them.
+ */
+const DSH_BUILTIN_MODELS = ['deepseek-flash', 'deepseek-v4-pro'];
+
+/** The pi-ai route an OpenAI-compatible gateway is served through. */
+const GATEWAY_PROVIDER = 'openai-gateway';
+
+/**
+ * The model a gateway route runs when none is configured: the one the
+ * OpenAgents gateway serves. It has since narrowed to this single id and
+ * refuses `deepseek-v4-flash` with "This gateway only allows: …".
+ */
+const DEFAULT_GATEWAY_MODEL = 'deepseek-v4.1-flash';
+
+/** Where DeepSeek's own model list is read (its OpenAI-style root). */
+const DEEPSEEK_MODELS_BASE = 'https://api.deepseek.com/v1';
 
 /** Permission modes dsh's `permission-presets` row declares. */
 const PERMISSION_MODES = ['read-only', 'workspace-write', 'danger-full-access'];
@@ -380,12 +403,14 @@ function yamlScalar(value) {
  *     `never` is what gives non-interactive execution that is still confined to
  *     the workspace for writes. (Reads are not confined in any mode.)
  *  3. The model/provider override, since `agent-default-model` is a composition
- *     row rather than an environment variable.
+ *     row rather than an environment variable. For an OpenAI-compatible
+ *     gateway (`gatewayBaseUrl`) that is a pi-ai chat-completions route plus
+ *     the default model pointing at it — see classifyDshEndpoint.
  *
  * A patch REPLACES the targeted row's whole `config`, so each row below is
  * written out complete rather than as a partial merge.
  */
-function buildPrivatePatch({ model, provider, permissionMode } = {}) {
+function buildPrivatePatch({ model, provider, permissionMode, gatewayBaseUrl, officialEndpoint = false } = {}) {
   const mode = normalizePermissionMode(permissionMode) || 'workspace-write';
   const sandboxFor = (m) => (m === 'read-only' ? 'read-only' : m === 'danger-full-access' ? 'danger-full-access' : 'workspace-write');
 
@@ -412,7 +437,39 @@ function buildPrivatePatch({ model, provider, permissionMode } = {}) {
     lines.push('        approval: never');
   }
 
-  if (model || provider) {
+  if (gatewayBaseUrl) {
+    // An OpenAI-compatible gateway has no Messages API for dsh's DeepSeek
+    // provider to call, so the run goes through dsh's pi-ai provider instead,
+    // as a chat-completions route of its own. pi-ai needs the model listed
+    // on the route, so the model is never left to the harness default here.
+    const gatewayModel = model || DEFAULT_GATEWAY_MODEL;
+    lines.push('');
+    lines.push(`- id: ${ROW.LLM_PI_AI}`);
+    lines.push('  config:');
+    lines.push('    providers:');
+    lines.push(`      ${GATEWAY_PROVIDER}:`);
+    lines.push('        api: openai-completions');
+    lines.push(`        baseURL: ${yamlScalar(gatewayBaseUrl)}`);
+    lines.push('        apiKeyEnv: DEEPSEEK_API_KEY');
+    lines.push('        models:');
+    lines.push(`          - id: ${yamlScalar(gatewayModel)}`);
+    lines.push('');
+    lines.push(`- id: ${ROW.AGENT_DEFAULT_MODEL}`);
+    lines.push('  config:');
+    lines.push(`    provider: ${GATEWAY_PROVIDER}`);
+    lines.push(`    model: ${yamlScalar(gatewayModel)}`);
+  } else if (model || provider) {
+    if (officialEndpoint && model && !DSH_BUILTIN_MODELS.includes(model)) {
+      // Declaring the model in the route's catalog is what keeps rc.5 from
+      // following the `/models` listing and refusing it before any request
+      // ("is not supported by DeepSeek Harness"). The API itself still decides
+      // whether the model exists, and says so in an error the user can act on.
+      lines.push('');
+      lines.push(`- id: ${ROW.LLM_DEEPSEEK}`);
+      lines.push('  config:');
+      lines.push('    models:');
+      lines.push(`      - id: ${yamlScalar(model)}`);
+    }
     lines.push('');
     lines.push(`- id: ${ROW.AGENT_DEFAULT_MODEL}`);
     lines.push('  config:');
@@ -443,6 +500,40 @@ function isOfficialDeepseekRoot(url) {
   if (parsed.hostname.toLowerCase() !== 'api.deepseek.com') return false;
   const p = parsed.pathname.replace(/\/+$/, '').toLowerCase();
   return p === '' || p === '/v1';
+}
+
+/**
+ * Which API dsh should use for a configured base URL.
+ *
+ *  - `native`: blank, or one of DeepSeek's own OpenAI-style roots. dsh uses
+ *    its default, `https://api.deepseek.com/anthropic`.
+ *  - `openai`: an OpenAI-compatible gateway — a base ending in a version
+ *    segment (`…/v1`), which is how OpenAI-style relays (OpenAgents credits
+ *    included) are written. These serve chat completions and no Messages
+ *    API, so dsh's DeepSeek provider got a 404 from every one of them.
+ *  - `anthropic`: anything else, used as given for the Messages API.
+ */
+function classifyDshEndpoint(url) {
+  const raw = String(url || '').trim();
+  if (!raw || isOfficialDeepseekRoot(raw)) return 'native';
+  let parsed;
+  try { parsed = new URL(raw); } catch { return 'anthropic'; }
+  const p = parsed.pathname.replace(/\/+$/, '').toLowerCase();
+  return /\/v\d+$/.test(p) ? 'openai' : 'anthropic';
+}
+
+/**
+ * Where to list the models a DeepSeek Harness agent can run, and over which
+ * protocol. DeepSeek's own host serves its list on the OpenAI-style root
+ * whichever form of its URL was configured, a blank base included (the
+ * agent always holds a DeepSeek key).
+ */
+function dshModelsEndpoint(url) {
+  const raw = String(url || '').trim();
+  let host = '';
+  try { host = new URL(raw).hostname.toLowerCase(); } catch {}
+  if (!raw || host === 'api.deepseek.com') return { baseUrl: DEEPSEEK_MODELS_BASE, protocol: 'openai' };
+  return { baseUrl: raw, protocol: classifyDshEndpoint(raw) === 'openai' ? 'openai' : 'anthropic' };
 }
 
 // ---------------------------------------------------------------------------
@@ -537,7 +628,12 @@ const FAILURE = {
 
 const FAILURE_PATTERNS = [
   [FAILURE.AUTH, /\b(401|403|unauthor|forbidden|invalid[_\s-]?api[_\s-]?key|authentication|no api key|missing api key|credential)/i],
-  [FAILURE.MODEL, /\b(model[_\s-]?not[_\s-]?found|unknown model|unsupported model|no such model|context[_\s-]?length|token limit|quota|rate[_\s-]?limit|429)/i],
+  // dsh 0.2.1-rc.5 refuses a model the official `/models` listing names but its
+  // own catalog does not ship ("… is not supported by DeepSeek Harness",
+  // MODEL_UNSUPPORTED), and one that needs a newer harness
+  // (CLIENT_UPGRADE_REQUIRED) — both before any request is sent.
+  [FAILURE.VERSION, /\b(requires DeepSeek Harness \S+ or later|client[_\s-]?upgrade[_\s-]?required)/i],
+  [FAILURE.MODEL, /\b(model[_\s-]?not[_\s-]?found|unknown model|unsupported model|model[_\s-]?unsupported|not supported by DeepSeek Harness|no such model|context[_\s-]?length|token limit|quota|rate[_\s-]?limit|429)/i],
   [FAILURE.NETWORK, /\b(econnrefused|enotfound|etimedout|econnreset|socket hang up|network|dns|proxy|certificate|tls|ssl|502|503|504)/i],
   [FAILURE.PERMISSION, /\b(eacces|eperm|erofs|permission denied|read[_\s-]?only file system|operation not permitted)/i],
   [FAILURE.VERSION, /\b(unsupported node|engine|requires node|syntaxerror.*unexpected token|err_require_esm|cannot use import statement)/i],
@@ -615,6 +711,7 @@ function selectSessionsForGc(entries, { now, keepCount = SESSION_KEEP_COUNT, kee
 
 module.exports = {
   SUPPORTED_DSH_VERSION,
+  DSH_BUILTIN_MODELS,
   NODE_MIN_22,
   ROW,
   PERMISSION_MODES,
@@ -638,6 +735,9 @@ module.exports = {
   buildPrivatePatch,
 
   isOfficialDeepseekRoot,
+  classifyDshEndpoint,
+  dshModelsEndpoint,
+  GATEWAY_PROVIDER,
 
   normalizePermissionMode,
   resolvePermissionMode,

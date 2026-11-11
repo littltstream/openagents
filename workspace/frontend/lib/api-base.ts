@@ -1,22 +1,17 @@
-import { desktopHost } from './desktop-host';
-
 const HOSTED_API = 'https://workspace-endpoint.openagents.org';
 
-/** External clients need the backend address, not the web-only /wsapi proxy. */
-export function getDirectApiBaseUrl(configured = process.env.NEXT_PUBLIC_API_URL): string {
+/** Preview CSP permits assets on the backend origin and ticket path. The web
+ * API proxy changes both, so ticket-scoped frames must use the direct endpoint.
+ * Creating the preview ticket still uses the normal authenticated transport.
+ */
+export function getProjectPreviewUrl(path: string, apiBase = getApiBaseUrl()): string {
+  return (apiBase === '/wsapi' ? HOSTED_API : apiBase) + path;
+}
+
+/** Keep API traffic direct so frequent browser polling bypasses the frontend CDN. */
+export function getApiBaseUrl(configured = process.env.NEXT_PUBLIC_API_URL): string {
   return (configured || HOSTED_API).replace(/\/+$/, '');
 }
 
-/** Use Next's same-origin proxy on the web; native and custom endpoints stay direct. */
-export function getApiBaseUrl(configured = process.env.NEXT_PUBLIC_API_URL): string {
-  const base = getDirectApiBaseUrl(configured);
-  if (
-    base === HOSTED_API &&
-    typeof window !== 'undefined' &&
-    /^https?:$/.test(window.location.protocol) &&
-    !desktopHost()
-  ) {
-    return '/wsapi';
-  }
-  return base;
-}
+/** Absolute backend endpoint for external devices and CLI clients. */
+export const getDirectApiBaseUrl = getApiBaseUrl;

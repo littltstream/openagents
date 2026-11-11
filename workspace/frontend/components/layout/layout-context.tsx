@@ -13,7 +13,9 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useState
+  useOptimistic,
+  useState,
+  useTransition
 } from 'react';
 import type { ArtifactReference } from '@/lib/thread-artifacts';
 import { requestedResource } from '@/lib/resource-link';
@@ -21,7 +23,7 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import type { FileSortKey, FileTypeFilter } from '@/components/files/file-utils';
 
-export type ViewMode = 'threads' | 'files' | 'knowledge' | 'browser' | 'issues' | 'tasks' | 'workflows' | 'routines' | 'inbox' | 'connect' | 'skills' | 'agents';
+export type ViewMode = 'threads' | 'files' | 'knowledge' | 'browser' | 'issues' | 'workflows' | 'routines' | 'inbox' | 'connect' | 'skills' | 'agents';
 
 /** The Files view has two halves the folder panel switches between. */
 export type FilesSection = 'folders' | 'trash';
@@ -122,6 +124,7 @@ export const RAIL_WIDTH_EXPANDED = 180;
 
 /** On mobile, which pane is showing: the list or the detail */
 export type MobilePane = 'list' | 'detail';
+export type ConnectSetupRequest = { method: 'desktop' | 'terminal' };
 
 interface LayoutState {
   selectedArtifact: ArtifactReference | null;
@@ -133,9 +136,20 @@ interface LayoutState {
   setSidebarOpen: (open: boolean) => void;
   sidebarToggle: () => void;
   viewMode: ViewMode;
+  /** The view being switched to, ahead of `viewMode` while the switch renders —
+   *  what the rail highlights, so a click answers at once. */
+  railViewMode: ViewMode;
   setViewMode: (mode: ViewMode) => void;
   /** Switch view and open/collapse the list panel to match it */
   openView: (mode: ViewMode) => void;
+  openConnectSetup: (method: ConnectSetupRequest['method']) => void;
+  connectSetupRequest: ConnectSetupRequest | null;
+  /** Open Connect Agents on its Cloud Agents tab. */
+  openCloudAgents: () => void;
+  /** Set by `openCloudAgents` until the connect view acts on it. */
+  cloudAgentsPending: boolean;
+  /** The connect view calls this once it has switched to Cloud Agents. */
+  consumeCloudAgents: () => void;
   /** Open Connect Agents straight on the add-agent gallery of a device. */
   openAddAgent: () => void;
   /** Set by `openAddAgent` until the connect view acts on it. */
@@ -195,14 +209,11 @@ interface LayoutState {
   /** Patch one part of it and leave the rest alone. */
   setFilesBrowse: (updates: Partial<FilesBrowseState>) => void;
   /**
-   * Hand-off from other views (e.g. an Inbox notification) into the Tasks
-   * board: a `task:<id>` channel whose chat popup should open on arrival.
-   * TasksView consumes and clears it.
+   * Hand-off from other views (e.g. an Inbox notification) into the Issues
+   * view: the issue to open on arrival. IssuesView consumes and clears it.
    */
   pendingIssueId: string | null;
   setPendingIssueId: (id: string | null) => void;
-  pendingTaskChannel: string | null;
-  setPendingTaskChannel: (channel: string | null) => void;
 }
 
 const LayoutContext = createContext<LayoutState | undefined>(undefined);
@@ -223,7 +234,6 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
   const [listPrefs, setListPrefs] = useState<ListPrefs>({});
   const [selectedAgentName, setSelectedAgentName] = useState<string | null>(null);
   const [pendingIssueId, setPendingIssueId] = useState<string | null>(null);
-  const [pendingTaskChannel, setPendingTaskChannel] = useState<string | null>(null);
   const [mobilePane, setMobilePane] = useState<MobilePane>('list');
   useEffect(() => {
     if (requestedResource(window.location.href)?.id || /\/threads\//.test(window.location.pathname) || new URLSearchParams(window.location.search).has('thread')) setMobilePane('detail');
@@ -295,14 +305,37 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
   const sidebarToggle = () => setSidebarOpen(!isSidebarOpen);
 
   // Switching views keeps whatever the user last chose for the target view.
+  // The switch renders as a transition: revealing a kept-alive view re-runs
+  // all of its effects, and rendered as an urgent update that held the click
+  // (and on Windows the whole window) until it was done. The rail follows the
+  // optimistic value, so the click still answers immediately.
+  const [, startViewTransition] = useTransition();
+  const [railViewMode, setRailViewMode] = useOptimistic(viewMode);
   const openView = (mode: ViewMode) => {
-    setViewMode(mode);
-    // Files is the exception: its list pane is a folder tree, and what you want
-    // on opening it is usually the file you or an agent just added — which is
-    // the detail pane's recent listing. The tree stays one tap away, and any
-    // folder already selected is what the pane opens on.
-    setMobilePane(mode === 'files' ? 'detail' : 'list');
+    startViewTransition(() => {
+      setRailViewMode(mode);
+      setViewMode(mode);
+      // Files is the exception: its list pane is a folder tree, and what you want
+      // on opening it is usually the file you or an agent just added — which is
+      // the detail pane's recent listing. The tree stays one tap away, and any
+      // folder already selected is what the pane opens on.
+      setMobilePane(mode === 'files' ? 'detail' : 'list');
+    });
   };
+
+  const [connectSetupRequest, setConnectSetupRequest] = useState<ConnectSetupRequest | null>(null);
+  const openConnectSetup = (method: ConnectSetupRequest['method']) => {
+    // A fresh request also handles choosing the same location after changing modes manually.
+    setConnectSetupRequest({ method });
+    openView('connect');
+  };
+
+  const [cloudAgentsPending, setCloudAgentsPending] = useState(false);
+  const openCloudAgents = () => {
+    setCloudAgentsPending(true);
+    openView('connect');
+  };
+  const consumeCloudAgents = useCallback(() => setCloudAgentsPending(false), []);
 
   const [addAgentPending, setAddAgentPending] = useState(false);
   const openAddAgent = () => {
@@ -343,6 +376,7 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
       setSidebarOpen,
       sidebarToggle,
       viewMode,
+      railViewMode,
       setViewMode,
       filesSection,
       setFilesSection,
@@ -350,9 +384,12 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
       setFilesBrowse,
       pendingIssueId,
       setPendingIssueId,
-      pendingTaskChannel,
-      setPendingTaskChannel,
       openView,
+      openConnectSetup,
+      connectSetupRequest,
+      openCloudAgents,
+      cloudAgentsPending,
+      consumeCloudAgents,
       openAddAgent,
       addAgentPending,
       consumeAddAgent,

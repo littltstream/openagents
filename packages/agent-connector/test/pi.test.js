@@ -466,6 +466,51 @@ describe('PiAdapter — launch command', () => {
     await shutdown(a);
   });
 
+  it('isolates a workspace API key from native provider login credentials', async () => {
+    const log = path.join(tmpRoot, `argv-isolated-key-${Date.now()}.json`);
+    const secret = 'workspace-provider-key';
+    const a = makeAdapter({
+      agentEnv: {
+        FAKE_SCENARIO: 'complete',
+        FAKE_ARGV_LOG: log,
+        PI_MODEL: 'relay-model',
+        PI_BASE_URL: 'https://api.deepseek.com',
+        PI_API_KEY: secret,
+      },
+    });
+    try {
+      await a._handleMessage(msg('hello'));
+      const snap = readArgvLog(log);
+      const provider = snap.argv[snap.argv.indexOf('--provider') + 1];
+      assert.equal(provider, 'openagents-openai');
+      assert.equal(snap.env.PI_PROVIDER, 'openai');
+      assert.equal(snap.env.PI_API_KEY, secret);
+      assert.ok(!snap.argv.some((arg) => String(arg).includes(secret)));
+    } finally {
+      await shutdown(a);
+    }
+  });
+
+  it('preserves a Pi-managed custom provider when no Launcher endpoint is configured', async () => {
+    const log = path.join(tmpRoot, `argv-pi-managed-${Date.now()}.json`);
+    const a = makeAdapter({
+      agentEnv: {
+        FAKE_SCENARIO: 'complete',
+        FAKE_ARGV_LOG: log,
+        PI_PROVIDER: 'custom',
+        PI_MODEL: 'existing-model',
+        PI_API_KEY: 'launcher-key-without-endpoint',
+      },
+    });
+    try {
+      await a._handleMessage(msg('hello'));
+      const snap = readArgvLog(log);
+      assert.equal(snap.argv[snap.argv.indexOf('--provider') + 1], 'custom');
+    } finally {
+      await shutdown(a);
+    }
+  });
+
   it('requires provider and model before launching a custom base URL', async () => {
     const a = makeAdapter({
       agentEnv: { FAKE_SCENARIO: 'complete', PI_BASE_URL: 'https://relay.example/v1' },
@@ -496,7 +541,7 @@ describe('PiAdapter — launch command', () => {
       let registered;
       configure({ registerProvider: (provider, config) => { registered = { provider, config }; } });
 
-      assert.equal(registered.provider, 'anthropic');
+      assert.equal(registered.provider, 'openagents-anthropic');
       assert.equal(registered.config.baseUrl, 'https://relay.example');
       assert.equal(registered.config.api, 'anthropic-messages');
       assert.equal(registered.config.apiKey, 'relay-key-in-memory-only');
@@ -533,7 +578,7 @@ describe('PiAdapter — launch command', () => {
       let registered;
       configure({ registerProvider: (provider, config) => { registered = { provider, config }; } });
 
-      assert.equal(registered.provider, 'deepseek');
+      assert.equal(registered.provider, 'openagents-deepseek');
       assert.equal(registered.config.baseUrl, 'https://api.deepseek.com/v1');
       assert.equal(registered.config.api, 'openai-completions');
       assert.equal(registered.config.apiKey, 'native-key-in-memory-only');
@@ -611,9 +656,20 @@ describe('PiAdapter — launch command', () => {
     const idx = snap.argv.indexOf('--append-system-prompt');
     assert.ok(idx >= 0);
     assert.ok(!snap.argv.includes('--system-prompt'));
-    const prompt = snap.argv[idx + 1];
-    assert.match(prompt, /OpenAgents workspace/);
-    assert.match(prompt, new RegExp(a.agentName));
+    const promptPath = snap.argv[idx + 1];
+    assert.ok(promptPath.length < 512);
+    assert.equal(path.dirname(promptPath), a._sessionDir);
+    assert.match(
+      path.basename(promptPath),
+      /^system-prompt-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.md$/i,
+    );
+    assert.ok(!snap.argv.join(' ').includes('workspace-token-value'));
+    const body = fs.readFileSync(promptPath, 'utf-8');
+    assert.match(body, /OpenAgents workspace/);
+    assert.match(body, new RegExp(a.agentName));
+    assert.match(body, /workspace-token-value/);
+    if (!IS_WINDOWS) assert.equal(fs.statSync(promptPath).mode & 0o777, 0o600);
+    assert.equal(a._captured.response.length, 1);
     await shutdown(a);
   });
 
@@ -623,6 +679,99 @@ describe('PiAdapter — launch command', () => {
     assert.equal(a._captured.error.length, 1);
     assert.match(a._captured.error[0], /Working directory does not exist/);
     assert.equal(Object.keys(a._persistentProcs).length, 0);
+  });
+});
+
+describe('the staged system prompt is removed when it is no longer read', () => {
+  const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const longPrompt = `token-in-here ${'q'.repeat(600)}`;
+
+  function staged(a) {
+    fs.mkdirSync(a._sessionDir, { recursive: true });
+    return PiAdapter.stagePiAppendSystemPrompt(longPrompt, a._sessionDir, sessionId);
+  }
+
+  it('removes it when the process that read it exits', () => {
+    const a = makeAdapter();
+    const file = staged(a);
+    const pp = { stagedPrompt: file };
+    a._persistentProcs.thread = pp;
+    a._releaseStagedPrompt('thread', pp);
+    assert.equal(fs.existsSync(file), false);
+  });
+
+  it('keeps it when a newer process already owns the channel', () => {
+    // A respawn rewrites the same path; the old process exiting late must not
+    // delete the file the new one is reading.
+    const a = makeAdapter();
+    const file = staged(a);
+    const oldPp = { stagedPrompt: file };
+    a._persistentProcs.thread = { stagedPrompt: file };
+    a._releaseStagedPrompt('thread', oldPp);
+    assert.equal(fs.existsSync(file), true);
+  });
+
+  it('removes it when the session is cleared and nothing is running', () => {
+    const a = makeAdapter();
+    a._channelSessions.thread = sessionId;
+    const file = staged(a);
+    a._clearSession('thread');
+    assert.equal(fs.existsSync(file), false);
+    assert.equal(a._channelSessions.thread, undefined);
+  });
+
+  it('keeps it when the session is cleared while a process still runs', () => {
+    const a = makeAdapter();
+    a._channelSessions.thread = sessionId;
+    const file = staged(a);
+    a._persistentProcs.thread = { stagedPrompt: file };
+    a._clearSession('thread');
+    assert.equal(fs.existsSync(file), true);
+  });
+});
+
+describe('stagePiAppendSystemPrompt', () => {
+  const stage = PiAdapter.stagePiAppendSystemPrompt;
+  const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+
+  it('returns a 512-character prompt unchanged and writes no file', () => {
+    const dir = fs.mkdtempSync(path.join(tmpRoot, 'stage-short-'));
+    const prompt = 'x'.repeat(512);
+    assert.equal(stage(prompt, dir, sessionId), prompt);
+    const staged = fs.readdirSync(dir).filter((name) => /^system-prompt-.*\.md$/.test(name));
+    assert.deepEqual(staged, []);
+  });
+
+  it('writes a 513-character prompt and returns the file path', () => {
+    const dir = fs.mkdtempSync(path.join(tmpRoot, 'stage-long-'));
+    const prompt = 'y'.repeat(513);
+    const got = stage(prompt, dir, sessionId);
+    assert.equal(fs.readFileSync(got, 'utf-8'), prompt);
+  });
+
+  it('uses system-prompt-default.md inside sessionDir for a non-UUID id', () => {
+    const prompt = 'z'.repeat(513);
+    for (const id of ['../x', '']) {
+      const dir = fs.mkdtempSync(path.join(tmpRoot, 'stage-id-'));
+      const got = stage(prompt, dir, id);
+      assert.equal(path.basename(got), 'system-prompt-default.md');
+      assert.equal(path.dirname(got), dir);
+    }
+  });
+
+  it('throws when sessionDir is an existing file', () => {
+    const sessionDir = path.join(tmpRoot, `stage-file-${Date.now()}`);
+    fs.writeFileSync(sessionDir, 'not a directory');
+    const prompt = `secret-${'p'.repeat(513)}`;
+    assert.throws(
+      () => stage(prompt, sessionDir, sessionId),
+      (err) => {
+        assert.match(err.message, /stage/i);
+        assert.ok(err.message.includes(sessionDir));
+        assert.ok(!err.message.includes(prompt));
+        return true;
+      },
+    );
   });
 });
 

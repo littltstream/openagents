@@ -102,6 +102,7 @@ class AgentConnector {
         displayName: a.display_name || null,
         type,
         role: a.role || 'worker',
+        ...(a.description !== undefined ? { description: a.description } : {}),
         network: a.network || null,
         networkName: network ? (network.name || network.slug) : null,
         path: a.path || null,
@@ -111,14 +112,13 @@ class AgentConnector {
     });
   }
 
-  addAgent({ name, type, role, path, env }) {
+  addAgent({ name, type, role, path, env, description }) {
     const agentType = type || 'openclaw';
-    this.config.addAgent({ name, type: agentType, role: role || 'worker', path, env });
+    this.config.addAgent({ name, type: agentType, role: role || 'worker', path, env, description });
     // A key entered while ADDING the agent needs the same native side effects
-    // as one saved later: OpenClaw and Hermes read a custom endpoint only from
-    // their own config. Without this a new agent's test passed on the form's
-    // key while the run used a stale one ("401 Invalid token") or none at all
-    // (Hermes falling back to OpenRouter: "401 Missing Authentication header").
+    // as one saved later: OpenClaw reads a custom endpoint only from its own
+    // config. Without this a new agent's test passed on the form's key while
+    // the run used a stale one ("401 Invalid token").
     if (env && Object.keys(env).length) {
       this._configureAgentNativeAuth(agentType, env, name);
     }
@@ -129,14 +129,15 @@ class AgentConnector {
    * _configureNativeAuth for one agent, on the env it actually runs with: the
    * type's keys and endpoint only when it has none of its own and does not
    * sign in through its CLI (typeEnvFor). Merging all of <type>.env pushed a
-   * key saved there earlier into Hermes's config.yaml for an agent created on
-   * the sign-in tab, which then ran on that key (401).
+   * key saved there earlier into the CLI's config for an agent created on the
+   * sign-in tab, which then ran on that key (401).
    */
   _configureAgentNativeAuth(agentType, agentEnv, agentName) {
     const typeEnv = typeEnvFor(agentType, this.env.load(agentType), this.registry, agentEnv);
     this._configureNativeAuth(agentType, { ...typeEnv, ...agentEnv }, agentName);
     // A Hermes agent moved to the `hermes setup` sign-in gets back the
-    // provider the custom endpoint replaced.
+    // provider an earlier version's custom endpoint replaced. (A keyed Hermes
+    // agent writes its own provider when it runs: HermesAdapter._endpoint.)
     if (agentType === 'hermes' && isCliLogin(agentEnv)) {
       try { require('./adapters/hermes').restoreNativeAuth(); } catch {}
     }
@@ -150,12 +151,6 @@ class AgentConnector {
         OpenClawAdapter.configureNativeAuth(agentName
           ? OpenClawAdapter.instanceEnv(agentName, env, this._configDir)
           : env);
-      }
-      // Hermes reads a custom endpoint only from its own config.yaml, so the
-      // saved LLM_* values must be pushed through `hermes config set` — the
-      // env file alone leaves it "No inference provider configured".
-      if (agentType === 'hermes') {
-        require('./adapters/hermes').configureNativeAuth(env);
       }
     } catch {}
   }

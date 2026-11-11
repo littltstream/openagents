@@ -6,6 +6,8 @@ import { I18nProvider } from "@/lib/i18n"
 import type { AgentCatalogEntry, WorkspaceNode } from "@/lib/types"
 import { AgentEnvFields } from "@renderer/components/agent-env-fields"
 import { Tabs, TabsList, TabsTrigger } from "@renderer/components/ui/tabs"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@renderer/components/ui/select"
+import { Field, FieldDescription, FieldLabel } from "@renderer/components/ui/field"
 import { AuthStatusBanner, CliLoginBlock } from "@renderer/components/agent-auth/auth-status"
 import { useCliLogin } from "@renderer/components/agent-auth/use-cli-login"
 import { Button } from "@renderer/components/ui/button"
@@ -18,16 +20,21 @@ import { throwIfInstallFailed } from "@renderer/utils/installErrors"
 import { showGlobalToast } from "@renderer/hooks/useToast"
 import { createLocalSetupApi, type LocalConfiguration } from "./local-setup-api"
 import { SetupAside } from "./components/setup-aside"
+import { SetupWorkdirField } from "./components/setup-workdir-field"
 import { agentCredentials, credentialErrors, isUnprobeable } from "../../../shared/agent-credentials"
 
-export function LocalAgentSetup({ agent, initialType, onBack, onCreated, onChanged, onManage }: {
+export function LocalAgentSetup({ agent, initialType, backLabel, onBack, onCreated, onChanged, onManage, onOpenType }: {
   agent?: Agent
   /** Open on this type's form instead of the type picker (a recommended card). */
   initialType?: string
+  /** The page Back and Cancel return to, for the breadcrumb; Connect Agents by default. */
+  backLabel?: string
   onBack: () => void
   onCreated: (name: string) => void
   onManage: (agent: { name: string; type: string }) => void
   onChanged: () => void
+  /** Leave the form for the type's marketplace page (update, versions, uninstall). */
+  onOpenType?: (type: string) => void
 }): React.JSX.Element {
   const { t, i18n } = useTranslation()
   const [data, setData] = useState<{ node: WorkspaceNode; catalog: AgentCatalogEntry[]; raw: CatalogEntry[] } | null>(null)
@@ -59,7 +66,10 @@ export function LocalAgentSetup({ agent, initialType, onBack, onCreated, onChang
     } })
     const runtimes = await Promise.all(available.map(async (entry) => {
       const health = await bounded(window.api.healthCheck(entry.name), 8000).catch(() => null)
+      // Adding: a type ready only on another agent's key is not ready for the new one. Editing has no
+      // per-agent key status here to judge the agent on, so it keeps the type's answer.
       return health ? { type: entry.name, installed: health.installed ?? entry.installed, ready: !!health.ready,
+        ...(agent ? {} : { typeReady: health.typeReady }),
         version: health.version ?? null, reason: health.reason ?? null, message: health.message ?? null } : null
     }))
     if (mounted.current && version === loadVersion.current) setData((previous) => previous ? { ...previous, node: { ...previous.node, runtimes: runtimes.filter((runtime) => runtime !== null) } } : null)
@@ -87,15 +97,17 @@ export function LocalAgentSetup({ agent, initialType, onBack, onCreated, onChang
           contextLabel={<>{t("agents.shared.runsHere")}{agent?.networkName || agent?.network ? ` · ${agent.networkName || agent.network}` : ` · ${t("agents.shared.localOnly")}`}</>}
           onBack={onBack} onChanged={() => { void refresh().catch((err) => { if (mounted.current) setError(String(err)) }); onChanged() }}
           onQueued={({ name }) => onCreated(name)}
-          extensions={{ local: true, headerActions: true, compact: true, breadcrumbRoot: t("nav.items.dashboard.label"),
-            aside: ({ type }) => <SetupAside type={type} label={data.catalog.find((entry) => entry.name === type)?.label || type}
-              workspace={agent?.networkName || agent?.network || null} />, workingDirectoryHint: t("agents.shared.folderHint"), workingDirectoryPlaceholder: t("agents.shared.homeFolder"), disabled: !configReady || authBusy,
+          extensions={{ local: true, headerActions: true, compact: true, breadcrumbRoot: backLabel || t("nav.items.dashboard.label"),
+            // The folder sits beside the model, half each, so the whole form fits without scrolling.
+            inlineWorkingDirectory: true,
+            aside: ({ type }) => <SetupAside type={type}
+              workspace={agent?.networkName || agent?.network || null} entry={data.raw.find((entry) => entry.name === type)} onOpenType={onOpenType} />, workingDirectoryHint: t("agents.shared.folderHint"), workingDirectoryPlaceholder: t("agents.shared.homeFolder"), disabled: !configReady || authBusy,
             browseFolder: (path) => window.api.selectDirectory(path || undefined),
             // The same rename This Computer's list offers: a label, pushed to the agent's workspace.
             renameAgent: async (agentName, label) => { await window.api.renameAgent(agentName, label) },
             signIn: (type) => data.raw.find((entry) => entry.name === type)?.check_ready?.login_command ? () => setSignInRequest((n) => n + 1) : undefined,
-            configuration: ({ type, name, onChanged: changed }) => <LocalConfigurationFields key={`${type}:${name || ""}`} type={type} name={name}
-              catalog={data.raw} onChanged={changed} onBusy={setAuthBusy} signInRequest={signInRequest}
+            configuration: ({ type, name, onChanged: changed, workingDirectory }) => <LocalConfigurationFields key={`${type}:${name || ""}`} type={type} name={name}
+              catalog={data.raw} onChanged={changed} onBusy={setAuthBusy} signInRequest={signInRequest} workingDirectory={workingDirectory}
               onChange={(next) => { config.current = next; setConfigReady(!!next) }} />,
           }} />
       </I18nProvider>}
@@ -107,10 +119,12 @@ export function toCatalogEntry(entry: CatalogEntry): AgentCatalogEntry {
     homepage: entry.homepage || "", tags: entry.tags || [], builtin: !!entry.builtin }
 }
 
-export function LocalConfigurationFields({ type, name, catalog, onChange, onChanged, onBusy, signInRequest = 0 }: {
+export function LocalConfigurationFields({ type, name, catalog, onChange, onChanged, onBusy, signInRequest = 0, workingDirectory }: {
   type: string; name?: string; catalog: CatalogEntry[]; onChange: (config: LocalConfiguration | null) => void; onChanged: () => void; onBusy: (busy: boolean) => void
   /** Changes when the user asks to sign in from outside this form. */
   signInRequest?: number
+  /** The agent's working folder, drawn beside the model field. */
+  workingDirectory?: { value: string; onChange: (value: string) => void }
 }): React.JSX.Element {
   const { t } = useTranslation()
   const [fields, setFields] = useState<EnvField[]>([])
@@ -196,7 +210,7 @@ export function LocalConfigurationFields({ type, name, catalog, onChange, onChan
   const test = async (): Promise<void> => {
     setTesting(true); setTestResult(null)
     try {
-      const result = await window.api.testLLM(values)
+      const result = await window.api.testLLM(values, type)
       // Nothing to probe is not a failed credential: say how it is verified instead.
       setTestResult(result.success
         ? { kind: "success", message: t("agents.shared.connectionWorks") }
@@ -223,11 +237,22 @@ export function LocalConfigurationFields({ type, name, catalog, onChange, onChan
   if (loading) return <Spinner />
   const keyForm = !loginCmd || authTab === "key"
   const loginModels = keyForm ? [] : fields.filter((field) => hasModelPicker(type, field.name))
+  // The adapter uses the CLI for native OpenAI and sign-in. Only a custom
+  // key endpoint chooses between its Responses CLI provider and direct chat.
+  const codexBaseUrl = values.OPENAI_BASE_URL || ""
+  const customCodex = type === "codex" && keyForm && !!codexBaseUrl && !codexBaseUrl.includes("api.openai.com")
+  // Match the adapter's legacy custom-endpoint default without writing a new
+  // override just because an existing agent's settings were opened.
+  const codexWireApi = (values.CODEX_WIRE_API || "").toLowerCase() === "responses" ? "responses" : "chat"
   const unprobeable = isUnprobeable(type)
   const unprobeableReason = agentCredentials(type).reason
+  // A new agent does not get a key another agent of the type holds. Its message then is that
+  // agent's "Ready", so the banner says the generic not-ready line instead.
+  const shownReady = !!health && (name ? health.ready : (health.typeReady ?? health.ready))
   return <div className="space-y-4">
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-    {health && <AuthStatusBanner authInfo={{ ready: health.ready, authMode: health.auth_mode || null, message: health.message || null }} authLabels={entry?.check_ready?.auth_detected_labels || null} />}
+    {health && (installed || !loginCmd) && <AuthStatusBanner authInfo={{ ready: shownReady, authMode: health.auth_mode || null,
+      message: !installed ? t("agents.loginStatus.installOnAdd") : shownReady === health.ready ? health.message || null : null }} authLabels={entry?.check_ready?.auth_detected_labels || null} />}
     {!loginCmd && fields.length === 0 && <p className="text-sm text-muted-foreground">{t("agents.configureDialog.hintNoConfig")}</p>}
     {loginCmd && fields.length > 0 && <Tabs value={authTab} onValueChange={(value) => chooseTab(value as "cli" | "key")}>
       <TabsList className="grid w-full grid-cols-2">
@@ -245,11 +270,22 @@ export function LocalConfigurationFields({ type, name, catalog, onChange, onChan
       }} /></div>}
     <AgentEnvFields agentType={type} modelPath={keyForm ? "key" : "login"} modelReloadKey={String(loggedIn)}
       fields={keyForm ? fields : loginModels}
-      values={values} onChange={change} onImport={keyForm ? importValues : undefined}
+      values={values} onChange={change} onImport={keyForm ? importValues : undefined} besideModel={workingDirectory && <SetupWorkdirField {...workingDirectory} />}
       focusField={invalid} errors={invalid ? { [invalid.name]: t("agents.envFields.required", { name: invalid.name }) } : undefined} />
     {!keyForm && loginModels.length > 0 && <p className="m-0 text-xs text-muted-foreground">
       {t(loginModels.some((field) => field.required) ? "agents.configureDialog.modelRequiredWithLogin" : "agents.configureDialog.modelWithLogin")}
     </p>}
+    {customCodex && <Field>
+      <FieldLabel htmlFor="local-codex-wire-api">{t("agents.codexApiMode.label")}</FieldLabel>
+      <Select value={codexWireApi} onValueChange={(value) => change("CODEX_WIRE_API", value)}>
+        <SelectTrigger id="local-codex-wire-api" aria-label={t("agents.codexApiMode.label")} className="w-full"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="responses">{t("agents.codexApiMode.responses")}</SelectItem>
+          <SelectItem value="chat">{t("agents.codexApiMode.chat")}</SelectItem>
+        </SelectContent>
+      </Select>
+      <FieldDescription>{t(codexWireApi === "responses" ? "agents.codexApiMode.responsesHint" : "agents.codexApiMode.chatHint")}</FieldDescription>
+    </Field>}
     {/* A test that can only fail is replaced by how this agent's credential IS verified. */}
     {keyForm && fields.length > 0 && (unprobeable
       ? <div role="note" className="flex items-start gap-2 rounded-lg border bg-muted/40 px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
@@ -262,14 +298,14 @@ export function LocalConfigurationFields({ type, name, catalog, onChange, onChan
       : <div className="flex flex-col gap-3 rounded-xl border bg-muted/30 px-3.5 py-3 sm:flex-row sm:items-center">
         <div className="flex min-w-0 flex-1 items-start gap-2.5">
           {testResult?.kind === "success"
-            ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-(--success)" />
             : testResult?.kind === "error"
               ? <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
               : <ShieldCheck className="mt-0.5 size-4 shrink-0 text-muted-foreground" />}
           <div className="min-w-0">
             <p className="m-0 text-xs font-medium text-foreground">{t("agents.shared.verifyApiSettings")}</p>
             <p role={testResult ? "status" : undefined} className={testResult
-              ? `m-0 mt-0.5 text-2xs leading-relaxed ${testResult.kind === "success" ? "text-emerald-600 dark:text-emerald-400" : testResult.kind === "error" ? "text-destructive" : "text-muted-foreground"}`
+              ? `m-0 mt-0.5 text-2xs leading-relaxed ${testResult.kind === "success" ? "text-foreground" : testResult.kind === "error" ? "text-destructive" : "text-muted-foreground"}`
               : "m-0 mt-0.5 text-2xs leading-relaxed text-muted-foreground"}>
               {testResult?.message || t("agents.shared.verifyApiSettingsHint")}
             </p>

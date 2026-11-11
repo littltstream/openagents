@@ -5,7 +5,7 @@
  *
  * Everything here runs without dsh, an API key or a network: the module under
  * test has no I/O. The version strings asserted below were captured from a live
- * `dsh -V` on @deepseek-ai/dsh 0.2.1-rc.2, and the row ids from that release's
+ * `dsh -V` on @deepseek-ai/dsh 0.2.1-rc.5, and the row ids from that release's
  * shipped `cordis.patch.yml`.
  */
 
@@ -35,6 +35,8 @@ const {
   selectSessionsForGc,
   SESSION_KEEP_COUNT,
   isOfficialDeepseekRoot,
+  classifyDshEndpoint,
+  dshModelsEndpoint,
 } = require('../src/adapters/deepseek-runtime');
 
 // The two comparators already in this repo, asserted against as a regression
@@ -139,10 +141,10 @@ describe('classifyDshVersion', () => {
   });
 
   it('pins the fallback constant', () => {
-    assert.equal(SUPPORTED_DSH_VERSION, '0.2.1-rc.2');
+    assert.equal(SUPPORTED_DSH_VERSION, '0.2.1-rc.5');
     assert.equal(
       defaultInstallCommand(),
-      'npm install -g @deepseek-ai/dsh@0.2.1-rc.2',
+      'npm install -g @deepseek-ai/dsh@0.2.1-rc.5',
     );
   });
 });
@@ -281,6 +283,27 @@ describe('argv construction', () => {
 });
 
 describe('private patch', () => {
+  // dsh rc.5 refuses a model the official /models listing names but its own
+  // catalog lacks — unless the route declares a catalog, which turns the
+  // listing off. deepseek-v4-flash, the id OpenAgents offers, is such a model.
+  it('declares a non-built-in model in the official route catalog', () => {
+    const { text } = buildPrivatePatch({ model: 'deepseek-v4-flash', officialEndpoint: true });
+    assert.match(text, /- id: llm-deepseek\n  config:\n    models:\n      - id: "deepseek-v4-flash"/);
+    assert.match(text, /- id: agent-default-model\n  config:\n    provider: "deepseek-official"\n    model: "deepseek-v4-flash"/);
+  });
+
+  it('leaves the catalog alone for a built-in model, a custom endpoint or a gateway', () => {
+    for (const opts of [
+      { model: 'deepseek-flash', officialEndpoint: true },
+      { model: 'deepseek-v4-pro', officialEndpoint: true },
+      { model: 'deepseek-v4-flash', officialEndpoint: false },
+      { model: 'deepseek-v4-flash', officialEndpoint: true, gatewayBaseUrl: 'https://relay.example.com/v1' },
+      { officialEndpoint: true },
+    ]) {
+      assert.doesNotMatch(buildPrivatePatch(opts).text, /- id: llm-deepseek\n/, JSON.stringify(opts));
+    }
+  });
+
   it('disables the question plugin and forces non-interactive approval', () => {
     const { text } = buildPrivatePatch({});
     assert.match(text, /- id: user-questions\n {2}disabled: true/);
@@ -305,6 +328,33 @@ describe('private patch', () => {
     assert.match(text, /- id: agent-default-model/);
     assert.match(text, /model: "deepseek-v4-flash"/);
     assert.match(text, /provider: "deepseek-official"/);
+  });
+
+  it('routes an OpenAI-compatible gateway through a pi-ai chat-completions route', () => {
+    const { text } = buildPrivatePatch({
+      model: 'deepseek-v4-flash',
+      gatewayBaseUrl: 'https://api-gateway.openagents.org/v1',
+    });
+    assert.match(text, /^- id: llm-pi-ai$/m);
+    assert.match(text, /^ {6}openai-gateway:$/m);
+    assert.match(text, /^ {8}api: openai-completions$/m);
+    assert.match(text, /^ {8}baseURL: "https:\/\/api-gateway\.openagents\.org\/v1"$/m);
+    assert.match(text, /^ {8}apiKeyEnv: DEEPSEEK_API_KEY$/m);
+    assert.match(text, /^ {10}- id: "deepseek-v4-flash"$/m);
+    assert.match(text, /^ {4}provider: openai-gateway$/m);
+    assert.ok(!text.includes('deepseek-official'));
+  });
+
+  it('names a model on a gateway route even when none is configured', () => {
+    const { text } = buildPrivatePatch({ gatewayBaseUrl: 'https://relay.example.com/v1' });
+    assert.match(text, /^ {10}- id: "deepseek-v4\.1-flash"$/m);
+    assert.match(text, /^ {4}model: "deepseek-v4\.1-flash"$/m);
+  });
+
+  it('quotes a hostile gateway URL instead of letting it inject YAML', () => {
+    const { text } = buildPrivatePatch({ gatewayBaseUrl: 'https://x/v1"\n- id: approval\n  config:\n    policy: ask' });
+    assert.equal((text.match(/^- id: approval$/gm) || []).length, 1);
+    assert.equal((text.match(/^\s*policy: ask$/gm) || []).length, 0);
   });
 
   it('quotes and escapes a hostile model id instead of letting it inject YAML', () => {
@@ -391,6 +441,9 @@ describe('failure classification', () => {
     ['permission', "EACCES: permission denied, open '/etc/hosts'", FAILURE.PERMISSION],
     ['version', 'SyntaxError: Unexpected token (ESM)', FAILURE.VERSION],
     ['config', 'failed to compose profile: unknown bundle', FAILURE.CONFIG],
+    // dsh 0.2.1-rc.5's refusals, raised before any request is sent.
+    ['an unlisted model as model', 'LlmError: DeepSeek model "deepseek-v4-flash" is not supported by DeepSeek Harness; current version is 0.2.1-rc.5', FAILURE.MODEL],
+    ['a model needing a newer harness as version', 'LlmError: DeepSeek model "deepseek-v5" requires DeepSeek Harness 0.2.2 or later; current version is 0.2.1-rc.5', FAILURE.VERSION],
   ];
   for (const [label, stderr, expected] of cases) {
     it(`classifies ${label}`, () => {
@@ -459,5 +512,36 @@ describe('isOfficialDeepseekRoot', () => {
     assert.equal(isOfficialDeepseekRoot('https://relay.example.com/v1'), false);
     assert.equal(isOfficialDeepseekRoot(''), false);
     assert.equal(isOfficialDeepseekRoot('not a url'), false);
+  });
+});
+
+describe('classifyDshEndpoint', () => {
+  it('leaves blank and DeepSeek\'s own roots to dsh\'s default', () => {
+    for (const base of ['', '  ', 'https://api.deepseek.com', 'https://api.deepseek.com/v1/'])
+      assert.equal(classifyDshEndpoint(base), 'native');
+  });
+
+  it('treats a versioned base as an OpenAI-compatible gateway', () => {
+    assert.equal(classifyDshEndpoint('https://api-gateway.openagents.org/v1'), 'openai');
+    assert.equal(classifyDshEndpoint('https://tokendance.space/gateway/v1/'), 'openai');
+    assert.equal(classifyDshEndpoint('https://open.bigmodel.cn/api/paas/v4'), 'openai');
+  });
+
+  it('uses anything else for the Messages API', () => {
+    assert.equal(classifyDshEndpoint('https://api.deepseek.com/anthropic'), 'anthropic');
+    assert.equal(classifyDshEndpoint('https://tokendance.space/gateway'), 'anthropic');
+    assert.equal(classifyDshEndpoint('not a url'), 'anthropic');
+  });
+});
+
+describe('dshModelsEndpoint', () => {
+  it('lists DeepSeek\'s models from its OpenAI-style root, whichever form was set', () => {
+    for (const base of ['', 'https://api.deepseek.com', 'https://api.deepseek.com/anthropic'])
+      assert.deepEqual(dshModelsEndpoint(base), { baseUrl: 'https://api.deepseek.com/v1', protocol: 'openai' });
+  });
+
+  it('lists a gateway in the protocol dsh calls it with', () => {
+    assert.deepEqual(dshModelsEndpoint('https://relay.example.com/v1'), { baseUrl: 'https://relay.example.com/v1', protocol: 'openai' });
+    assert.deepEqual(dshModelsEndpoint('https://relay.example.com/anthropic'), { baseUrl: 'https://relay.example.com/anthropic', protocol: 'anthropic' });
   });
 });

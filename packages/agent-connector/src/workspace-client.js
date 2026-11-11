@@ -2,6 +2,7 @@
 
 const https = require('https');
 const http = require('http');
+const { normalizeDescription } = require('../../agent-collaboration/src/description');
 
 const DEFAULT_ENDPOINT = 'https://workspace-endpoint.openagents.org';
 // Agent progress noise that never belongs in a conversation transcript.
@@ -196,15 +197,20 @@ class WorkspaceClient {
   /**
    * Join a workspace via POST /v1/join.
    */
-  async joinNetwork(agentName, token, { network, agentType, serverHost, workingDir } = {}) {
+  async joinNetwork(agentName, token, { network, agentType, serverHost, workingDir, description } = {}) {
     const body = { agent_name: agentName, token };
     if (network) body.network = network;
     if (agentType) body.agent_type = agentType;
     if (serverHost) body.server_host = serverHost;
     if (workingDir) body.working_dir = workingDir;
+    if (description !== undefined) body.description = normalizeDescription(description);
 
     const data = await this._post('/v1/join', body);
-    return data.data || data;
+    const result = data.data || data;
+    if (description !== undefined && typeof result.description_initialized !== 'boolean') {
+      throw new Error('Workspace server does not support default agent descriptions; update the backend before using --description');
+    }
+    return result;
   }
 
   /**
@@ -627,11 +633,12 @@ class WorkspaceClient {
    * Skill Hub UI can render installing / installed / failed states. Best
    * effort — returns the updated payload or throws (caller decides).
    */
-  async reportSkillStatus(workspaceId, agentName, token, { skillId, state, path: installPath, error, partial } = {}) {
+  async reportSkillStatus(workspaceId, agentName, token, { skillId, state, path: installPath, error, partial, versionId } = {}) {
     const body = { skill_id: skillId, state };
     if (installPath) body.path = installPath;
     if (error) body.error = String(error).slice(0, 2000);
     if (partial) body.partial = true;
+    if (versionId) body.version_id = versionId;
     const data = await this._post(
       `/v1/workspaces/${workspaceId}/members/${encodeURIComponent(agentName)}/skills/status`,
       body,
@@ -722,6 +729,8 @@ class WorkspaceClient {
       status: a.status || 'offline',
       enabledSkills: a.enabled_skills || null,
       model: a.model || null,
+      description: a.description || null,
+      agentType: a.agent_type || null,
     }));
   }
 
@@ -815,6 +824,16 @@ class WorkspaceClient {
     return this._getRaw(`/v1/files/${fileId}?${params}`, this._wsHeaders(token), 60000);
   }
 
+  /** Download an immutable public registry version. */
+  async readRegistryVersion(versionId, token) {
+    if (!versionId) throw new Error('registry version id is required');
+    return this._getRaw(
+      `/v1/registry/versions/${encodeURIComponent(versionId)}/download`,
+      this._wsHeaders(token),
+      60000,
+    );
+  }
+
   /**
    * Delete a file via DELETE /v1/files/{fileId}.
    */
@@ -872,6 +891,17 @@ class WorkspaceClient {
    * Get screenshot via GET /v1/browser/tabs/{tabId}/screenshot.
    * @returns {Buffer}
    */
+  /**
+   * Attach files to a file input via POST /v1/browser/tabs/{tabId}/upload.
+   * @param {Array<{file_id?: string, name?: string, mime_type?: string, data_base64?: string}>} files
+   */
+  async browserUpload(workspaceId, token, tabId, files, { selector = 'input[type=file]', frame_selector, source, channel } = {}) {
+    const body = { selector, files, source, channel };
+    if (frame_selector) body.frame_selector = frame_selector;
+    const data = await this._post(`/v1/browser/tabs/${tabId}/upload`, body, this._wsHeaders(token));
+    return data.data || data;
+  }
+
   async browserScreenshot(workspaceId, token, tabId, { source, channel } = {}) {
     const query = new URLSearchParams();
     if (source) query.set('source', source);
@@ -934,10 +964,11 @@ class WorkspaceClient {
     return data.data || data;
   }
 
-  async getTodos(workspaceId, channelName, token, { agent, all } = {}) {
+  async getTodos(workspaceId, channelName, token, { agent, all, source } = {}) {
     const params = new URLSearchParams({ network: workspaceId });
     if (channelName) params.set('channel', channelName);
     if (agent) params.set('agent', agent);
+    if (source) params.set('source', source);
     if (all) params.set('all', 'true');
     const data = await this._get(`/v1/todos?${params}`, this._wsHeaders(token));
     return data.data || data;

@@ -6,7 +6,7 @@ run as an OpenAgents agent. OpenAgents drives its **headless profile** — one
 
 > **Preview release.** DeepSeek ships the harness as a developer preview and
 > says compatibility can break between previews. OpenAgents therefore pins one
-> exact version (`0.2.1-rc.2`) and refuses to run against any other, including
+> exact version (`0.2.1-rc.5`) and refuses to run against any other, including
 > newer ones. See [Version pinning](#version-pinning).
 
 ---
@@ -56,7 +56,7 @@ connection** to verify the key against the endpoint the agent will actually use.
 | Variable | Required | Notes |
 |---|---|---|
 | `DEEPSEEK_API_KEY` | **yes** | The agent runs with a private, empty harness home, so there is no saved `dsh` login to fall back on. |
-| `DEEPSEEK_BASE_URL` | no | Gateway/proxy speaking the Anthropic Messages API. Blank uses the public DeepSeek API (`https://api.deepseek.com/anthropic`); DeepSeek's OpenAI-style roots (`https://api.deepseek.com`, `…/v1`) are ignored, since the harness cannot use them. |
+| `DEEPSEEK_BASE_URL` | no | Gateway/proxy. Blank uses the public DeepSeek API (`https://api.deepseek.com/anthropic`); DeepSeek's OpenAI-style roots (`https://api.deepseek.com`, `…/v1`) mean the same. Any other URL ending in a version segment (`https://relay.example.com/v1`, OpenAgents credits) is an OpenAI-compatible gateway, run through the harness's pi-ai provider over chat completions. Anything else must speak the Anthropic Messages API. |
 | `DEEPSEEK_MODEL` | no | e.g. `deepseek-v4-flash`. Blank uses the harness default. |
 | `DSH_PERMISSION_MODE` | no | `read-only`, `workspace-write` (default) or `danger-full-access`. An invalid value is rejected, not silently defaulted. |
 
@@ -98,10 +98,26 @@ and `ps`, so the adapter never does:
 - the prompt is written to a private task file (`0600` on POSIX) and deleted
   when the run ends, including on failure;
 - argv carries only a fixed sentence naming that file;
-- the task file references the token as `$OPENAGENTS_WORKSPACE_TOKEN`, never its
+- the task file references the token as `$OPENAGENTS_WORKSPACE_AUTH`, never its
   value; the value and `DEEPSEEK_API_KEY` are passed only in the child
   environment;
 - logs record the flags and the task file's name and size, never its contents.
+
+Why `…_AUTH` and not `…_TOKEN`: dsh removes every variable whose name matches
+`KEY|PASSWORD|SECRET|TOKEN` from the commands it runs, with no setting to let
+one through. Under a `_TOKEN` name the agent's shell never saw the token, and
+agents went looking for it in `daemon.yaml` — which put the raw value into the
+model's context and dsh's session log. `DEEPSEEK_API_KEY` stays scrubbed.
+
+### Windows
+
+Inside dsh's Windows sandbox (`workspace-write`, the default) shell commands run
+under a token with no Schannel credentials: `curl.exe` and `Invoke-WebRequest`
+fail every HTTPS request with `SEC_E_NO_CREDENTIALS`. Node's TLS is unaffected,
+so on Windows the task file routes workspace calls through
+`deepseek-workspace-api.js` (GET/POST/PUT/PATCH/DELETE, `upload`, `download`)
+on the adapter's own Node, with JSON bodies passed as files so non-ASCII text
+survives Windows PowerShell.
 
 If the task file cannot be written the run **fails**. There is deliberately no
 fallback to passing the prompt on the command line.

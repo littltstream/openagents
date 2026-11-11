@@ -3,7 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execSync, exec, execFile, spawnSync } = require('child_process');
+const { execSync, execFileSync, exec, execFile, spawnSync } = require('child_process');
 const {
   whichBinary,
   getEnhancedEnv,
@@ -19,13 +19,15 @@ const {
 const { isWslBinary, bridgedCommandString, wslHomeUnc } = require('./wsl');
 const { canBlock } = require('./probe-mode');
 const { EnvManager } = require('./env');
-const { nodeDistUrls, installRegistry } = require('./mirrors');
+const { nodeDistUrls, installRegistry, userConfiguredRegistry } = require('./mirrors');
+const { resolveInstallableVersion, fetchPackument, unpinnedPackage } = require('./node-engines');
 const { readinessReason, REASON } = require('./adapters/health-status');
 const { resolveCursorNodeEntry } = require('./adapters/cursor-node-entry');
 const { checkInstallPrereqs, missingPrereqError } = require('./install-preflight');
 const { detectShadowedNodeShims, shadowedNodeWarning } = require('./node-shims');
 const { fixSpawnHelpers } = require('./node-pty-perms');
 const { isPostinstallStub } = require('./postinstall-stub');
+const { nativeBuildFor } = require('./native-build');
 const { classifyClineAuth } = require('./adapters/cline-stream');
 
 /**
@@ -70,7 +72,43 @@ const CREDS_CLASSIFIERS = {
   cline_providers(creds) {
     return classifyClineAuth(creds, {}).state;
   },
+  // ~/.copilot/config.json lists the GitHub accounts `copilot` /login signed
+  // in. An empty list (or no file) is not "signed out": a GH_TOKEN or a gh
+  // sign-in works without it, so that stays for the run to decide.
+  copilot_logged_in_users(creds) {
+    const users = creds && creds.loggedInUsers;
+    return Array.isArray(users) && users.length > 0 ? 'ready' : 'unknown';
+  },
 };
+
+/**
+ * JSON that may carry `//` and `/* *\/` comments (JSONC). Copilot writes its
+ * config.json with a two-line `//` header, so a strict parse read a signed-in
+ * user's file as unparseable. Comments are removed outside strings only.
+ */
+function parseJsonLoose(raw) {
+  const text = String(raw);
+  try { return JSON.parse(text); } catch { /* fall through to JSONC */ }
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j;
+    } else if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+      out += '\n';
+    } else if (c === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      i = end === -1 ? text.length : end + 1;
+    } else {
+      out += c;
+    }
+  }
+  return JSON.parse(out);
+}
 
 /** The named classifier's verdict, or null when the entry names none. */
 function classifyCreds(checkReady, creds) {
@@ -919,7 +957,7 @@ class Installer {
     // ~/.gemini/oauth_creds.json) or a service-account file path, WITHOUT
     // parsing or logging the token. Additive: agents that don't declare
     // creds_no_parse / creds_path_env get identical behavior to before.
-    const credsFile = this._evaluateCredsFile(checkReady, agentType);
+    const credsFile = this._evaluateCredsFile(checkReady, agentType, savedEnv);
     const credsPathReady = this._checkCredsPathEnv(checkReady, savedEnv, agentType);
 
     let cliReady = false;
@@ -981,7 +1019,7 @@ class Installer {
     // agent never needs.
     const credsReady = checkReady.creds_json_has_entries
       ? false
-      : this._checkCredsReady(checkReady, agentType);
+      : this._checkCredsReady(checkReady, agentType, savedEnv);
     if (credsReady || credsFile.ready || credsPathReady) {
       return {
         ready: true,
@@ -1072,14 +1110,14 @@ class Installer {
     return checkReady.creds_file || null;
   }
 
-  _checkCredsReady(checkReady, agentType) {
+  _checkCredsReady(checkReady, agentType, savedEnv = null) {
     if (this._credsFile(checkReady)) {
       try {
-        const credsPath = this._expandHome(this._credsFile(checkReady), agentType);
+        const credsPath = this._credsFilePath(checkReady, agentType, savedEnv);
         if (fs.existsSync(credsPath)) {
           const stat = fs.statSync(credsPath);
           if (stat.isDirectory()) return fs.readdirSync(credsPath).length > 0;
-          const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+          const creds = parseJsonLoose(fs.readFileSync(credsPath, 'utf-8'));
           const verdict = classifyCreds(checkReady, creds);
           if (verdict) return verdict === 'ready';
           if (checkReady.creds_key) return !!creds[checkReady.creds_key];
@@ -1096,6 +1134,18 @@ class Installer {
       }
     }
 
+    // An item named by service AND account. A separate field from
+    // keychain_service so an older core, which would match on the service
+    // alone, skips it rather than reading someone else's item as a sign-in.
+    // agy keeps its Google sign-in as service `gemini`, account `antigravity`:
+    // the same pair it stores on Windows as the target `gemini:antigravity`.
+    const item = checkReady.keychain_item;
+    if (item && item.service && item.account && process.platform === 'darwin') {
+      if (this._checkMacKeychain(item.service, item.account)) {
+        return true;
+      }
+    }
+
     if (checkReady.credential_target && process.platform === 'win32') {
       if (this._checkWindowsCredential(checkReady.credential_target)) {
         return true;
@@ -1103,6 +1153,38 @@ class Installer {
     }
 
     return false;
+  }
+
+  /**
+   * Where `creds_file` is for this machine. A CLI that keeps its sign-in in
+   * the XDG data directory (MiMo Code's auth.json) follows XDG_DATA_HOME when
+   * it is set, so `creds_xdg_data_file` names the file under it and
+   * `creds_file` stays the default — which is also all an older core reads.
+   * `creds_home_env` + `creds_home_env_file` name a CLI home variable that
+   * overrides both. The agent's own setting (`savedEnv`, what the CLI is
+   * spawned with) comes before the daemon's. Not for a WSL install: the variable here is this
+   * side's, not the distro's.
+   */
+  _credsFilePath(checkReady, agentType, savedEnv = null) {
+    const fromEnv = (name) => String((savedEnv && savedEnv[name]) || process.env[name] || '').trim();
+    let wsl = null;
+    const isWsl = () => {
+      if (wsl === null) {
+        wsl = false;
+        try { wsl = !!agentType && isWslBinary(this._whichBinary(agentType)); } catch { /* best-effort */ }
+      }
+      return wsl;
+    };
+    // A CLI home named by its own variable comes first (MiMo Code reads
+    // $MIMOCODE_HOME/data/auth.json when MIMOCODE_HOME is set).
+    const homeVar = checkReady.creds_home_env;
+    const homeRel = checkReady.creds_home_env_file;
+    const cliHome = homeVar && homeRel ? fromEnv(homeVar) : '';
+    if (cliHome && path.isAbsolute(cliHome) && !isWsl()) return path.join(cliHome, homeRel);
+    const rel = checkReady.creds_xdg_data_file;
+    const dataHome = fromEnv('XDG_DATA_HOME');
+    if (rel && dataHome && path.isAbsolute(dataHome) && !isWsl()) return path.join(dataHome, rel);
+    return this._expandHome(this._credsFile(checkReady), agentType);
   }
 
   /**
@@ -1155,9 +1237,9 @@ class Installer {
    * against the running user's home (the daemon/launcher user), not the
    * renderer/browser user.
    */
-  _credsFileState(checkReady, agentType) {
+  _credsFileState(checkReady, agentType, savedEnv = null) {
     if (!this._credsFile(checkReady)) return 'absent';
-    const p = this._expandHome(this._credsFile(checkReady), agentType);
+    const p = this._credsFilePath(checkReady, agentType, savedEnv);
     let exists = false;
     try { exists = fs.existsSync(p); } catch { return 'unreadable'; }
     if (!exists) return 'absent';
@@ -1168,7 +1250,7 @@ class Installer {
       if (checkReady.creds_classifier) {
         const raw = fs.readFileSync(p, 'utf-8');
         let parsed;
-        try { parsed = JSON.parse(raw); } catch { parsed = { __parse_error: true }; }
+        try { parsed = parseJsonLoose(raw); } catch { parsed = { __parse_error: true }; }
         const verdict = classifyCreds(checkReady, parsed);
         if (verdict) return verdict === 'ready' ? 'present' : verdict === 'unknown' ? 'unknown' : 'absent';
       }
@@ -1204,11 +1286,11 @@ class Installer {
    * Returns { ready, unreadable }, plus `unknown: true` when the entry's
    * creds_classifier cannot tell from the file.
    */
-  _evaluateCredsFile(checkReady, agentType) {
+  _evaluateCredsFile(checkReady, agentType, savedEnv = null) {
     if (!this._credsFile(checkReady) || !checkReady.creds_no_parse) {
       return { ready: false, unreadable: false };
     }
-    const state = this._credsFileState(checkReady, agentType);
+    const state = this._credsFileState(checkReady, agentType, savedEnv);
     return {
       ready: state === 'present',
       unreadable: state === 'unreadable',
@@ -1252,11 +1334,12 @@ class Installer {
    *
    * Cached like _checkWindowsCredential, and never waited on in Electron main.
    */
-  _checkMacKeychain(service) {
+  _checkMacKeychain(service, account = null) {
     if (!service) return false;
-    const cached = keychainItemCache.get(service);
+    const cacheKey = account ? `${service}\u0000${account}` : service;
+    const cached = keychainItemCache.get(cacheKey);
     const fresh = cached && (Date.now() - cached.ts) < STATUS_CACHE_TTL_MS;
-    const args = ['find-generic-password', '-s', service];
+    const args = ['find-generic-password', '-s', service, ...(account ? ['-a', account] : [])];
     if (!fresh && canBlock()) {
       let found = false;
       try {
@@ -1266,20 +1349,20 @@ class Installer {
         });
         found = !run.error && run.status === 0;
       } catch {}
-      keychainItemCache.set(service, { found, ts: Date.now() });
-    } else if (!fresh && !keychainRefreshing.has(service)) {
+      keychainItemCache.set(cacheKey, { found, ts: Date.now() });
+    } else if (!fresh && !keychainRefreshing.has(cacheKey)) {
       // Answer from the last lookup now; the refresh lands for the next call.
-      keychainRefreshing.add(service);
+      keychainRefreshing.add(cacheKey);
       try {
         execFile('security', args, { timeout: 5000 }, (err) => {
-          keychainRefreshing.delete(service);
-          keychainItemCache.set(service, { found: !err, ts: Date.now() });
+          keychainRefreshing.delete(cacheKey);
+          keychainItemCache.set(cacheKey, { found: !err, ts: Date.now() });
         });
       } catch {
-        keychainRefreshing.delete(service);
+        keychainRefreshing.delete(cacheKey);
       }
     }
-    return !!(keychainItemCache.get(service) || {}).found;
+    return !!(keychainItemCache.get(cacheKey) || {}).found;
   }
 
   /**
@@ -1447,7 +1530,7 @@ class Installer {
 
     let bootstrapEnv = this._buildShellEnv();
     let installEnv;
-    if (agentType === 'hermes' && process.platform === 'win32') {
+    if (['hermes', 'qoder', 'qoder-cn'].includes(agentType) && process.platform === 'win32') {
       const prepared = this._prepareWindowsPowerShellInstall(cmd, bootstrapEnv);
       cmd = prepared.command;
       bootstrapEnv = prepared.env;
@@ -1546,11 +1629,11 @@ class Installer {
     let env = this._buildShellEnv();
     const isWin = process.platform === 'win32';
 
-    // Hermes's registry command names the inbox Windows PowerShell host for
-    // compatibility, but some Windows environments expose only PowerShell 7.
-    // Resolve the host that actually exists and keep module paths from the
-    // launcher's own PowerShell runtime out of both installer processes.
-    if (agentType === 'hermes' && isWin) {
+    // Resolve a compatible host and keep inherited PowerShell 7 modules out
+    // of Windows PowerShell. Qoder otherwise cannot load Get-FileHash when
+    // verifying its download, just as Hermes's uv bootstrap could not load
+    // Get-ExecutionPolicy.
+    if (['hermes', 'qoder', 'qoder-cn'].includes(agentType) && isWin) {
       const prepared = this._prepareWindowsPowerShellInstall(rawCmd, env);
       rawCmd = prepared.command;
       env = prepared.env;
@@ -1589,6 +1672,12 @@ class Installer {
       // on next install). --registry is added only when we'd be helping — see
       // installRegistry(); a user's own registry choice is never overridden.
       const registry = installRegistry();
+      const direct = this._resolveNodeNpmCli();
+      // `latest` may need a Node newer than the one that will run it.
+      if (direct) {
+        const held = await this._holdBackForNode(pkgArgs, direct.node, registry, onData);
+        pkgArgs.splice(0, pkgArgs.length, ...held);
+      }
       // The verbose log stays: it is the install's progress, and the output the
       // stall watchdog below waits on.
       const npmArgs = [
@@ -1598,7 +1687,6 @@ class Installer {
       ];
       displayCmd = `npm ${npmArgs.join(' ')}`;
 
-      const direct = this._resolveNodeNpmCli();
       if (direct) {
         spawnFile = direct.node;
         spawnArgs = [direct.npmCli, ...npmArgs];
@@ -1768,18 +1856,14 @@ class Installer {
             if (onData) onData(`\nDone! ${agentType} is now installed.\n`);
             resolve({ success: true, command: displayCmd });
           };
-          // An npm package whose postinstall was skipped exits 0 with a
-          // placeholder where its CLI should be. See _findPostinstallStub.
-          const stub = this._findPostinstallStub(agentType);
-          if (stub) {
-            this._repairPostinstallStub(agentType, stub, onData).then((problem) => {
-              if (!problem) return markDone();
-              if (onData) onData(`\n${problem}\n`);
-              reject(new Error(problem));
-            }, reject);
-            return;
-          }
-          markDone();
+          // An npm install can exit 0 with no runnable CLI: the native build
+          // left out, or the postinstall skipped. See finishNpmInstall (null
+          // for an agent that is not an npm install).
+          this.finishNpmInstall(agentType, onData).then((problem) => {
+            if (!problem) return markDone();
+            if (onData) onData(`\n${problem}\n`);
+            reject(new Error(problem));
+          }, reject);
         } else {
           // A partial install can leave a placeholder stub at
           // bin/<binary>.exe and npm-generated cmd-shims under
@@ -1875,7 +1959,29 @@ class Installer {
    * every other package and every other install.
    */
   _rebuildWithScripts(pkgName, prefix) {
-    const args = ['rebuild', pkgName, '--prefix', prefix, '--ignore-scripts=false', '--foreground-scripts'];
+    return this._runNpmIn(prefix, ['rebuild', pkgName, '--prefix', prefix, '--ignore-scripts=false', '--foreground-scripts']);
+  }
+
+  /**
+   * Install the per-platform package that holds a wrapper's native build, on
+   * its own (see native-build.js). `--include=optional` outranks an
+   * `omit=optional` in an npmrc for this one command; `--no-save` keeps it out
+   * of the runtime's package.json, so the next update resolves it afresh with
+   * the wrapper's new version instead of pinning this one. From the registry
+   * the install itself used (installRegistry): where the official one is out
+   * of reach, the build's download is the one most likely to have failed.
+   */
+  _installNativeBuildPackage(build, prefix) {
+    const registry = installRegistry();
+    return this._runNpmIn(prefix, [
+      'install', `${build.name}@${build.spec}`, '--prefix', prefix,
+      '--no-save', '--include=optional', '--foreground-scripts',
+      ...(registry ? ['--registry', registry] : []),
+    ]);
+  }
+
+  /** Run npm with an argv (never a shell string) in `prefix`; resolves its output, rejects with it. */
+  _runNpmIn(prefix, args) {
     const env = this._buildShellEnv();
     const run = this._execFileForTest || execFile;
     const runNpm = (file, argv, extra = {}) => new Promise((resolve, reject) => {
@@ -1898,9 +2004,10 @@ class Installer {
       const win = process.platform === 'win32';
       const npm = whichBinary('npm') || (win ? 'npm.cmd' : 'npm');
       // npm.cmd is a batch file and only runs through cmd.exe. With shell:true
-      // Node joins the argv with spaces, so quote the ones that contain any.
+      // Node joins the argv with spaces, so quote the ones that contain any —
+      // or a character cmd.exe would act on (a `^1.2.3` version range).
       if (win && /\.(cmd|bat)$/i.test(npm)) {
-        const q = (a) => (/\s/.test(a) ? `"${a}"` : a);
+        const q = (a) => (/[\s^&|<>()]/.test(a) ? `"${a}"` : a);
         return runNpm(q(npm), args.map(q), { shell: true });
       }
       return runNpm(npm, args);
@@ -1923,8 +2030,97 @@ class Installer {
    * package already taken back out.
    */
   async finishNpmInstall(agentType, onData) {
+    // The native build first: with it missing, claude-code's and opencode-ai's
+    // postinstall ran and had nothing to copy, and re-running the script (the
+    // placeholder repair below) cannot help until it is there.
+    const missing = this._findMissingNativeBuild(agentType);
+    let nativeRestored = false;
+    if (missing) {
+      const problem = await this._restoreNativeBuild(agentType, missing, onData);
+      if (problem) return problem;
+      nativeRestored = true;
+    }
     const stub = this._findPostinstallStub(agentType);
-    return stub ? this._repairPostinstallStub(agentType, stub, onData) : null;
+    return stub ? this._repairPostinstallStub(agentType, stub, onData, { nativeRestored }) : null;
+  }
+
+  /**
+   * The managed copy of an agent's npm package — `{ pkgName, pkgDir, prefix }`
+   * — or null when it is not an npm install or is not there.
+   */
+  _managedNpmPackage(agentType) {
+    const entry = this.registry.getEntry(agentType);
+    const pkgName = this._npmPackageFor(entry && entry.install);
+    if (!pkgName) return null;
+    const prefixes = [getRuntimePrefix(agentType), path.join(os.homedir(), '.openagents', 'nodejs')];
+    for (const prefix of prefixes) {
+      const pkgDir = path.join(prefix, 'node_modules', ...pkgName.split('/'));
+      if (fs.existsSync(path.join(pkgDir, 'package.json'))) return { pkgName, pkgDir, prefix };
+    }
+    return null;
+  }
+
+  /**
+   * The managed copy of an agent whose per-platform native build npm left out
+   * (see native-build.js), or null — also when the package has none to check.
+   *
+   * @returns {{ pkgName: string, pkgDir: string, prefix: string, build: object } | null}
+   */
+  _findMissingNativeBuild(agentType) {
+    const managed = this._managedNpmPackage(agentType);
+    if (!managed) return null;
+    const build = nativeBuildFor(managed.pkgDir);
+    if (!build || build.installed) return null;
+    // opencode-ai's postinstall fetches the build itself when npm left it out,
+    // copies the binary over its placeholder and deletes the package again
+    // (see COPIED_INTO_BIN). Installing it once more was redundant, and when
+    // that failed the working install was removed. Read off disk, not run:
+    // on Windows the placeholder is shell text named .exe.
+    if (build.copiedIntoBin) {
+      const entry = this.registry.getEntry(agentType);
+      const binary = (entry && entry.install && entry.install.binary) || agentType;
+      const bin = resolveManagedNpmPackageBin(agentType, managed.pkgName, binary);
+      if (bin && !isPostinstallStub(bin)) return null;
+    }
+    return { ...managed, build };
+  }
+
+  /**
+   * Install the native build npm left out. Resolves null once it is in place,
+   * otherwise the message to show — with the package taken back out, as for a
+   * placeholder that cannot be repaired: left in place it reads as installed.
+   */
+  async _restoreNativeBuild(agentType, missing, onData) {
+    const entry = this.registry.getEntry(agentType);
+    const label = (entry && entry.label) || agentType;
+    const { build, prefix, pkgDir } = missing;
+    if (onData) {
+      onData(`\nnpm did not install ${build.name}, the package that holds ${label}'s native build for `
+        + `${build.target} (an optional dependency of ${build.pkgName}). Installing it on its own now.\n`);
+    }
+    let output = '';
+    try {
+      output = await this._installNativeBuildPackage(build, prefix);
+    } catch (e) {
+      output = (e && e.message) || '';
+    }
+    const now = nativeBuildFor(pkgDir);
+    if (now && now.installed) {
+      try { clearBinaryLookupCache(); } catch {}
+      if (onData) onData(`${build.name} is in place: ${now.installed}\n`);
+      return null;
+    }
+    try {
+      this._cleanStaleShims(agentType);
+      fs.rmSync(pkgDir, { recursive: true, force: true });
+    } catch {}
+    const tail = output.trim().slice(-2000);
+    return `${label} was downloaded, but not its native build for this computer: npm did not install `
+      + `${build.name} (an optional dependency of ${build.pkgName}), so ${label} cannot start. npm leaves `
+      + 'an optional dependency out without failing the install when its download fails, or when optional '
+      + 'dependencies are turned off (omit=optional in an npmrc). Installing it on its own failed too. '
+      + `Check this computer's connection to the npm registry, then install ${label} again.`
+      + (tail ? `\n\nnpm output:\n${tail}` : '');
   }
 
   /**
@@ -1948,22 +2144,25 @@ class Installer {
    * restores nothing, and with no placeholder left to notice the install gets
    * recorded as good.
    */
-  async _repairPostinstallStub(agentType, stub, onData) {
+  async _repairPostinstallStub(agentType, stub, onData, { nativeRestored = false } = {}) {
     const entry = this.registry.getEntry(agentType);
     const label = (entry && entry.label) || agentType;
     // The user asked npm to skip install scripts; this lets them say the
     // repair must not run one either.
     const optedOut = scriptRepairDisabled();
+    // With the native build only just restored, the script did run — it had
+    // nothing to copy. Otherwise npm skipped it.
+    const why = nativeRestored
+      ? `${stub.pkgName}'s install script ran before its native build was there, so the ${label} CLI is `
+        + 'still a placeholder.'
+      : `npm skipped ${stub.pkgName}'s install script (ignore-scripts), so the ${label} CLI is only `
+        + 'a placeholder.';
     let output = '';
     if (optedOut) {
-      if (onData) {
-        onData(`\nnpm skipped ${stub.pkgName}'s install script (ignore-scripts), so the ${label} CLI is only `
-          + 'a placeholder. OPENAGENTS_NO_SCRIPT_REPAIR=1 is set, so it is not being run.\n');
-      }
+      if (onData) onData(`\n${why} OPENAGENTS_NO_SCRIPT_REPAIR=1 is set, so it is not being run.\n`);
     } else {
       if (onData) {
-        onData(`\nnpm skipped ${stub.pkgName}'s install script (ignore-scripts), so the ${label} CLI is only `
-          + 'a placeholder. Running it for this one package now — set OPENAGENTS_NO_SCRIPT_REPAIR=1 to refuse.\n');
+        onData(`\n${why} Running it for this one package now — set OPENAGENTS_NO_SCRIPT_REPAIR=1 to refuse.\n`);
       }
       try {
         output = await this._rebuildWithScripts(stub.pkgName, stub.prefix);
@@ -1981,6 +2180,15 @@ class Installer {
       fs.rmSync(path.join(stub.prefix, 'node_modules', stub.pkgName), { recursive: true, force: true });
     } catch {}
     const tail = output.trim().slice(-2000);
+    if (nativeRestored) {
+      return `${label} was downloaded, but its setup could not be finished: ${stub.pkgName}'s `
+        + 'install script did not put its native build in place, so its CLI is only a placeholder. '
+        + (optedOut
+          ? 'OPENAGENTS_NO_SCRIPT_REPAIR=1 stops OpenAgents from running the script again. '
+          : 'Running the script again did not produce the binary either. ')
+        + `Install ${label} again.`
+        + (tail ? `\n\nnpm output:\n${tail}` : '');
+    }
     return `${label} was downloaded, but its setup could not be finished: ${stub.pkgName}'s `
       + 'postinstall script did not run, so its CLI is only a placeholder. npm is set to skip '
       + 'install scripts (ignore-scripts=true in an npmrc), and '
@@ -2521,7 +2729,7 @@ class Installer {
       throw new Error('Windows PowerShell or PowerShell 7 is required for this installer.');
     }
     return {
-      command: this._retargetPowerShellCommand(command, host),
+      command: this._retargetPowerShellCommand(this._wrapForWindowsShell(command), host),
       env: this._powerShellChildEnv(env),
       host,
     };
@@ -2672,6 +2880,46 @@ class Installer {
   }
 
   /**
+   * Swap an unpinned package (`pkg`, `pkg@latest`) for the newest release
+   * whose `engines.node` accepts the Node that will run it. openclaw raises
+   * its floor without notice (2026.10.6 wanted Node 24.22.1 while the runtime
+   * was 24.21.0) and its preinstall exits 1 below it, so a workspace's remote
+   * "create agent" — which installs here, not through the launcher's own
+   * holdback — failed on every such machine. Anything uncertain (no Node
+   * version, registry unreachable, unreadable range) leaves the args alone.
+   *
+   * @param {string[]} pkgArgs
+   * @param {string} nodeBin  the node npm runs under
+   * @param {string|null} registry  the `--registry` this install will use
+   * @param {function(string)} [onData]
+   * @returns {Promise<string[]>}
+   */
+  async _holdBackForNode(pkgArgs, nodeBin, registry, onData) {
+    const pkgs = pkgArgs.filter((a) => !a.startsWith('-'));
+    if (pkgs.length !== 1) return pkgArgs;
+    const pkg = unpinnedPackage(pkgs[0]);
+    if (!pkg) return pkgArgs;
+    let nodeVersion;
+    try {
+      nodeVersion = execFileSync(nodeBin, ['-v'], { encoding: 'utf-8', timeout: 5000, windowsHide: true }).trim();
+    } catch { return pkgArgs; }
+    let info;
+    try {
+      info = await fetchPackument(registry || userConfiguredRegistry() || 'https://registry.npmjs.org', pkg);
+    } catch { return pkgArgs; }
+    const latest = info && info['dist-tags'] && info['dist-tags'].latest;
+    const target = resolveInstallableVersion(info, nodeVersion);
+    if (!latest || !target || target === latest) return pkgArgs;
+    const range = info.versions && info.versions[latest] && info.versions[latest].engines
+      && info.versions[latest].engines.node;
+    if (onData) {
+      onData(`${pkg}@${latest} requires Node ${range}, but agents here run on Node ${nodeVersion} — `
+        + `installing ${target}, the newest release that supports it.\n\n`);
+    }
+    return pkgArgs.map((a) => (a === pkgs[0] ? `${pkg}@${target}` : a));
+  }
+
+  /**
    * The Node.js the portable runtime gets — the same pin as the launcher's
    * bootstrap/node-version.ts, which owns upgrading an existing runtime; this
    * copy only ever installs onto a machine with no Node at all. Node 24 needs
@@ -2682,7 +2930,7 @@ class Installer {
       const [major, minor] = String(release).split('.').map(Number);
       if (major < 22 || (major === 22 && minor < 6)) return 'v22.22.3';
     }
-    return 'v24.21.0';
+    return 'v24.22.1';
   }
 
   /**
@@ -2977,12 +3225,12 @@ class Installer {
    * `Invoke-RestMethod`, etc. The launcher's install shell is cmd.exe, which
    * doesn't recognize these aliases — without wrapping, e.g. Cursor's
    * `irm '…' | iex` exits 255. Skips commands already prefixed with
-   * `powershell`/`powershell.exe` so we don't double-wrap.
+   * `powershell`/`pwsh` so we don't double-wrap.
    */
   _wrapForWindowsShell(cmd) {
     if (!cmd || process.platform !== 'win32') return cmd;
     const trimmed = cmd.trimStart();
-    if (/^("[^"]*\\)?powershell(\.exe)?["']?\s/i.test(trimmed)) return cmd;
+    if (/^("[^"]*\\)?(powershell|pwsh)(\.exe)?["']?\s/i.test(trimmed)) return cmd;
     const psTokens = /\b(irm|iwr|iex|Invoke-RestMethod|Invoke-WebRequest|Invoke-Expression|Expand-Archive|Get-[A-Z]\w*|Set-[A-Z]\w*)\b/;
     if (!psTokens.test(cmd)) return cmd;
     const escaped = cmd.replace(/"/g, '\\"');
@@ -3041,4 +3289,4 @@ function escapeRegExp(text) {
   return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-module.exports = { Installer, compareVersions, clearVersionCache, loginVerdict, credentialListHasTarget };
+module.exports = { Installer, compareVersions, clearVersionCache, loginVerdict, credentialListHasTarget, parseJsonLoose };

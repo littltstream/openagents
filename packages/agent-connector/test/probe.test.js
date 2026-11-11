@@ -2,7 +2,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { probeAgentType, classifyFailure, buildGuidance, authFlavor, scrub, CODE } = require('../src/probe');
+const { probeAgentType, classifyFailure, buildGuidance, authFlavor, scrub, failureMessage, CODE } = require('../src/probe');
 
 // A minimal fake connector: registry entry + health + env are all injectable
 // so no real CLI or network is touched.
@@ -64,6 +64,15 @@ describe('classifyFailure', () => {
     assert.equal(classifyFailure('still working...', { timedOut: true }), CODE.TIMEOUT);
   });
 
+  it('does not read Claude Code\'s unknown-model signal as the reason a run failed', () => {
+    // Printed before every request on a relay model; the probe strips it so
+    // a timeout stays unexplained and goes on to the direct API check.
+    const { stripCliNoise } = require('../src/adapters/utils');
+    const output = stripCliNoise('[claude-code:unrecognized_model] {"model":"deepseek-v4-pro[1m]","query_source":"sdk"}\n');
+    assert.equal(output.trim(), '');
+    assert.equal(classifyFailure(output, { timedOut: true }), CODE.TIMEOUT);
+  });
+
   it('classifies unknown-model errors without a timeout too', () => {
     assert.equal(
       classifyFailure("There's an issue with the selected model (claude-opus-4-6)."),
@@ -114,6 +123,115 @@ describe('scrub', () => {
     assert.ok(!out.includes('abc123def456'), out);
     assert.ok(out.includes('sk-****'));
     assert.ok(!scrub('Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload').includes('eyJhbGci'));
+  });
+});
+
+describe('failureMessage', () => {
+  const blob = `${'Ab9_'.repeat(14)}.${'Qz3-'.repeat(20)}`;
+
+  it('never offers an encoded blob as the reason', () => {
+    const res = { code: 1, stdout: `warning: Falling back from WebSockets to HTTPS transport\n${blob}`, stderr: '' };
+    const msg = failureMessage(res, CODE.CLI_ERROR, 120000);
+    assert.ok(!msg.includes('Ab9_Ab9_'), msg);
+    assert.ok(msg.includes('Falling back'), msg);
+  });
+
+  it('leaves out a dumped-object fragment that is mostly encoded', () => {
+    const res = {
+      code: 1,
+      timedOut: true,
+      stdout: '',
+      stderr: `warning: model metadata missing\n849-1.0.1.${'Qz3x'.repeat(4)}\\",md: '3P2K.${'Ab9_'.repeat(6)}.JdMRRLCtAU4vyOVXABHQclPCjjm5L9wR2.85P8rZZuqdP4zNv0t5HElFIRAXSdJgBc`,
+    };
+    assert.equal(failureMessage(res, CODE.TIMEOUT, 120000), 'Timed out after 120s: warning: model metadata missing');
+  });
+
+  it('keeps hex ids, paths and URLs', () => {
+    const line = 'HTTP 402: Insufficient Balance (request_id: e00c569f-0a07-4fe9-a1c2-57d73843a0d3) at https://api.deepseek.com/chat/completions';
+    assert.ok(failureMessage({ code: 1, stdout: '', stderr: line }, CODE.OUT_OF_CREDIT, 120000).includes('Insufficient Balance'));
+  });
+
+  it('names an unreachable host when Codex times out on one', () => {
+    const stderr = 'ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest("http/request failed: error sending request for url (https://chatgpt.com/backend-api/ps/mcp)")))';
+    const res = { code: 1, timedOut: true, stdout: '', stderr };
+    const code = classifyFailure(stderr, { timedOut: true });
+    assert.equal(code, CODE.NETWORK);
+    assert.ok(failureMessage(res, code, 120000).includes('chatgpt.com'));
+  });
+
+  it('quotes the model-list error, not the ChatGPT connector, when Codex cannot reach OpenAI', () => {
+    // Verbatim shape from the dashboard: a device that cannot reach chatgpt.com
+    // ran out the 120s clock, and the connector's line was quoted as the reason.
+    const stderr = [
+      '2026-11-08T05:37:58.539562Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest("http/request failed")))',
+      '2026-11-08T05:38:10.120000Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out',
+    ].join('\n');
+    const res = { code: null, timedOut: true, stdout: '', stderr };
+    const code = classifyFailure(stderr, { timedOut: true });
+    assert.equal(code, CODE.NETWORK, 'a lost connection, not a CLI waiting for a login prompt');
+    const msg = failureMessage(res, code, 120000);
+    assert.equal(msg, 'Timed out after 120s: ERROR codex_models_manager::manager: failed to refresh available models: request timed out');
+  });
+
+  it('reads Codex connection wording as a network failure', () => {
+    for (const text of [
+      'ERROR codex_models_manager::manager: failed to refresh available models: Connection failed: error sending request',
+      'stream disconnected before completion: Transport error',
+      'failed to lookup address information: nodename nor servname provided',
+    ]) {
+      assert.equal(classifyFailure(text, { timedOut: true }), CODE.NETWORK, text);
+    }
+  });
+
+  it('puts what the CLI said in plain words ahead of its log records', () => {
+    const stderr = [
+      '2026-11-08T05:37:58Z ERROR codex_core::exec: something internal',
+      'Error: the configured workspace is read-only',
+    ].join('\n');
+    const msg = failureMessage({ code: 1, stdout: '', stderr }, CODE.CLI_ERROR, 120000);
+    assert.match(msg, /^Error: the configured workspace is read-only/);
+    assert.doesNotMatch(msg, /2026-11-08T/, 'the timestamp is dropped from a quoted log record');
+  });
+
+  it('reports the error line of a crash, not its stack frames', () => {
+    const stderr = [
+      'file:///C:/Users/a/.openagents/runtimes/codex/node_modules/@openai/codex/bin/codex.js:108',
+      'Error: Missing optional dependency @openai/codex-win32-x64. Reinstall Codex: npm install -g @openai/codex@latest',
+      ...Array.from({ length: 12 }, (_, i) => `    at file:///C:/Users/a/.openagents/runtimes/codex/node_modules/@openai/codex/bin/codex.js:${100 + i}:9`),
+    ].join('\n');
+    const msg = failureMessage({ code: 1, stdout: '', stderr }, CODE.CLI_ERROR, 120000);
+    assert.match(msg, /Missing optional dependency/);
+    assert.doesNotMatch(msg, /:105:9/);
+  });
+
+  it('reads a direct API test that ran out of time as the network', () => {
+    assert.equal(classifyFailure('Request to api.openai.com timed out after 15s'), CODE.NETWORK);
+  });
+
+  it('says how it exited when the output was only a blob', () => {
+    assert.equal(failureMessage({ code: 3, stdout: blob, stderr: '' }, CODE.CLI_ERROR, 120000), 'Exited with code 3');
+  });
+
+  it('keeps a JSON error line', () => {
+    const res = { code: 1, stdout: '{"detail":"Unauthorized_for_this_model"}', stderr: '' };
+    assert.ok(failureMessage(res, CODE.CLI_ERROR, 120000).includes('Unauthorized_for_this_model'));
+  });
+
+  it('keeps a failure line that echoes the full key, with the key masked', () => {
+    const key = `sk-proj-${'aB3dE5fG7hJ9kL1m'.repeat(10)}`;
+    const plain = `Error: 401 Incorrect API key provided: ${key}`;
+    const json = JSON.stringify({ error: { message: `Incorrect API key provided: ${key}. You can find your API key at https://platform.openai.com/account/api-keys.`, type: 'invalid_request_error', code: 'invalid_api_key' } });
+    for (const stderr of [plain, json]) {
+      const msg = failureMessage({ code: 1, stdout: '', stderr }, CODE.INVALID_API_KEY, 120000);
+      assert.match(msg, /Incorrect API key provided/);
+      assert.ok(!msg.includes('aB3dE5fG7hJ9'), msg);
+      assert.ok(!msg.includes(key.slice(8, 30)), msg);
+    }
+  });
+
+  it('masks a JWT inside a sentence', () => {
+    const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlLXZhbHVl';
+    assert.ok(!scrub(`refresh failed for ${jwt} at login`).includes('eyJzdWIi'));
   });
 });
 
@@ -221,6 +339,21 @@ describe('probeAgentType', () => {
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.equal(r.method, 'cli');
     assert.equal(r.reply, 'hi there');
+  });
+
+  it('runs the CLI with the env its probe declares, under the agent\'s own values', async () => {
+    const entry = {
+      name: 'gemini', label: 'Gemini CLI',
+      probe: {
+        args: ['-e', 'console.log(`${process.env.OA_PROBE_FLAG}/${process.env.OA_PROBE_OWN}`)'],
+        env: { OA_PROBE_FLAG: 'true', OA_PROBE_OWN: 'declared' },
+        timeout_s: 30,
+      },
+    };
+    const c = fakeConnector({ entry, health: { installed: true, ready: true, binary: process.execPath } });
+    const r = await probeAgentType(c, 'gemini', { agentEnv: { OA_PROBE_OWN: 'mine' } });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.reply, 'true/mine');
   });
 
   it('classifies a failing CLI probe and returns guidance', async () => {
@@ -382,6 +515,66 @@ describe('probeAgentType', () => {
     }
   });
 
+  it('tests a Codex agent in Responses mode on the Responses API, and names a refused field', async () => {
+    const path = require.resolve('../src/utils');
+    const saved = require.cache[path];
+    const calls = [];
+    const refusal = 'HTTP 400: {"error":{"message":"Unsupported Responses request parameter.","type":"invalid_request_error","param":"client_metadata","code":"unsupported_parameter"}}';
+    require.cache[path] = {
+      id: path, filename: path, loaded: true,
+      exports: { testLLMConnection: async (_env, opts) => { calls.push(opts); return { success: false, error: refusal }; } },
+    };
+    try {
+      const entry = { name: 'codex', label: 'Codex', probe: { args: ['exec', 'hi'], timeout_s: 30, skip_cli_with_key: true } };
+      const c = fakeConnector({ entry, health: { installed: true, ready: true, binary: process.execPath } });
+      const relay = { OPENAI_API_KEY: 'sk-relay', OPENAI_BASE_URL: 'https://relay.example/v1' };
+
+      const r = await probeAgentType(c, 'codex', { agentEnv: { ...relay, CODEX_WIRE_API: 'responses' } });
+      assert.equal(calls.at(-1).protocol, 'responses');
+      assert.equal(r.code, CODE.ENDPOINT_INCOMPATIBLE, JSON.stringify(r));
+      const text = r.guidance.join('\n');
+      assert.match(text, /refuses the "client_metadata" field that Codex sends with every one of them/);
+      assert.match(text, /Chat only · Chat Completions API/);
+
+      // Chat-only mode (direct API) keeps the chat test, and a parameter
+      // refusal there is not read as an incompatible endpoint.
+      const chat = await probeAgentType(c, 'codex', { agentEnv: { ...relay, CODEX_WIRE_API: 'chat' } });
+      assert.equal(calls.at(-1).protocol, undefined);
+      assert.notEqual(chat.code, CODE.ENDPOINT_INCOMPATIBLE);
+      // OpenAI itself is never tested as a custom Responses provider.
+      await probeAgentType(c, 'codex', { agentEnv: { OPENAI_API_KEY: 'sk-x', OPENAI_BASE_URL: 'https://api.openai.com/v1', CODEX_WIRE_API: 'responses' } });
+      assert.equal(calls.at(-1).protocol, undefined);
+    } finally {
+      if (saved) require.cache[path] = saved; else delete require.cache[path];
+    }
+  });
+
+  it('does not blame Codex for a refused max_output_tokens — the test sends it, the CLI never does', async () => {
+    const path = require.resolve('../src/utils');
+    const saved = require.cache[path];
+    let refusal = 'HTTP 400: {"error":{"message":"Unsupported parameter: max_output_tokens","type":"invalid_request_error","param":"max_output_tokens","code":"unsupported_parameter"}}';
+    require.cache[path] = {
+      id: path, filename: path, loaded: true,
+      exports: { testLLMConnection: async () => ({ success: false, error: refusal }) },
+    };
+    try {
+      const entry = { name: 'codex', label: 'Codex', probe: { args: ['exec', 'hi'], timeout_s: 30, skip_cli_with_key: true } };
+      const c = fakeConnector({ entry, health: { installed: true, ready: true, binary: process.execPath } });
+      const agentEnv = { OPENAI_API_KEY: 'sk-relay', OPENAI_BASE_URL: 'https://relay.example/v1', CODEX_WIRE_API: 'responses' };
+      const r = await probeAgentType(c, 'codex', { agentEnv });
+      assert.notEqual(r.code, CODE.ENDPOINT_INCOMPATIBLE, JSON.stringify(r));
+      assert.doesNotMatch(r.guidance.join('\n'), /sends with every one of them/);
+
+      // A refusal that names another field is the endpoint's, whatever else its message mentions.
+      refusal = 'error: {"param":"client_metadata","code":"unsupported_parameter","message":"Unsupported parameter: client_metadata (max_output_tokens is fine)"}';
+      const other = await probeAgentType(c, 'codex', { agentEnv });
+      assert.equal(other.code, CODE.ENDPOINT_INCOMPATIBLE, JSON.stringify(other));
+      assert.match(other.guidance.join('\n'), /refuses the "client_metadata" field/);
+    } finally {
+      if (saved) require.cache[path] = saved; else delete require.cache[path];
+    }
+  });
+
   it('skips the API call for an agent whose key is not a model API key', async () => {
     const path = require.resolve('../src/utils');
     const saved = require.cache[path];
@@ -437,6 +630,22 @@ describe('probeAgentType', () => {
     assert.ok(r.guidance.some((l) => /expired/.test(l) && /claude login/.test(l)), JSON.stringify(r.guidance));
   });
 
+  it('looks past Codex\'s fallback-metadata warning to the real error', async () => {
+    const warning = 'warning: Model metadata for `gpt-5.5` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.';
+    const entry = {
+      name: 'codex', label: 'Codex',
+      probe: {
+        args: ['-e', `console.error(${JSON.stringify(warning)}); console.error("stream error: unexpected status 502 Bad Gateway"); process.exit(1)`],
+        timeout_s: 30,
+      },
+    };
+    const c = fakeConnector({ entry, health: { installed: true, ready: true, binary: process.execPath } });
+    const r = await probeAgentType(c, 'codex');
+    assert.equal(r.ok, false);
+    assert.ok(!/Model metadata/.test(r.message), r.message);
+    assert.ok(/502 Bad Gateway/.test(r.message), r.message);
+  });
+
   it('does not count the unknown-model notice alone as a reply', async () => {
     const entry = {
       name: 'claude', label: 'Claude',
@@ -472,6 +681,53 @@ describe('probeAgentType', () => {
     const r = await probeAgentType(c, 'claude');
     assert.equal(r.ok, false);
     assert.equal(r.code, CODE.EMPTY_RESPONSE);
+  });
+
+  it('counts an answer from a CLI that then fails to exit as a pass', async () => {
+    const entry = { name: 'claude', label: 'Claude', probe: { args: ['-e', 'console.log("Hi! What can I help you with?"); setTimeout(()=>{}, 60000)'] } };
+    const c = fakeConnector({ entry, health: { installed: true, ready: true, binary: process.execPath } });
+    const r = await probeAgentType(c, 'claude', { timeoutMs: 500 });
+    assert.equal(r.ok, true);
+    assert.equal(r.code, CODE.OK);
+    assert.match(r.message, /did not exit within/);
+    assert.equal(r.reply, 'Hi! What can I help you with?');
+  });
+
+  it('still reports a timeout when what it printed is an error or a retry', async () => {
+    for (const line of ['Attempt 1 failed with status 503. Retrying with backoff...', 'API Error: 401 unauthorized']) {
+      const entry = { name: 'claude', label: 'Claude', probe: { args: ['-e', `console.log(${JSON.stringify(line)}); setTimeout(()=>{}, 60000)`] } };
+      const c = fakeConnector({ entry, health: { installed: true, ready: true, binary: process.execPath } });
+      const r = await probeAgentType(c, 'claude', { timeoutMs: 500 });
+      assert.equal(r.ok, false, line);
+    }
+  });
+
+  it('drops codex housekeeping from the timeout message', async () => {
+    const stderr = [
+      'Reading additional input from stdin...',
+      '2026-10-28T08:48:54.592712Z  WARN codex_core::plugins: failed to refresh plugin cache',
+      '2026-10-28T08:48:54.592712Z ERROR codex_skills_extension::host_service: failed to install system skills',
+    ].join('\n');
+    const entry = { name: 'codex', label: 'Codex', probe: { args: ['-e', `console.error(${JSON.stringify(stderr)}); setTimeout(()=>{}, 60000)`] } };
+    const c = fakeConnector({ entry, health: { installed: true, ready: true, binary: process.execPath } });
+    const r = await probeAgentType(c, 'codex', { timeoutMs: 500 });
+    assert.equal(r.ok, false);
+    assert.doesNotMatch(r.message, /Reading additional input|WARN/);
+    assert.match(r.message, /failed to install system skills/);
+  });
+
+  it('drops Node process warnings that come ahead of the real error', async () => {
+    const stderr = [
+      '(node:18244) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities',
+      '(Use `node --trace-warnings ...` to show where the warning was created)',
+      '401 Authentication required. Please use /login command to sign in to your account',
+    ].join('\n');
+    const entry = { name: 'codebuddy', label: 'CodeBuddy', probe: { args: ['-e', `console.error(${JSON.stringify(stderr)}); process.exit(1)`] } };
+    const c = fakeConnector({ entry, health: { installed: true, ready: true, binary: process.execPath } });
+    const r = await probeAgentType(c, 'codebuddy', { timeoutMs: 5000 });
+    assert.equal(r.ok, false);
+    assert.doesNotMatch(r.message, /DeprecationWarning|trace-warnings/);
+    assert.match(r.message, /401 Authentication required/);
   });
 
   it('kills and reports a hanging CLI as timeout', async () => {

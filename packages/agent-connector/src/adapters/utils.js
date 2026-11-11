@@ -240,19 +240,73 @@ function decodeConsoleOutput(buf, isWindows = process.platform === 'win32') {
  * they hid the real one. Claude Code warns about its claude.ai connectors
  * whenever a key is set, and about a model it does not know (any relay model:
  * glm, kimi, …) — "…so it assumes a context window of 200000 tokens … Until
- * then auto-compact keeps this session within 200k tokens".
+ * then auto-compact keeps this session within 200k tokens". Codex does the
+ * same for a model missing from its catalog: "warning: Model metadata for
+ * `gpt-5.5` not found. Defaulting to fallback metadata…", and logs every
+ * run's housekeeping as timestamped WARN/INFO records plus "Reading prompt
+ * from stdin...", which filled the smoke test's timeout message. Node's own
+ * process warnings ("(node:1234) Warning: …", "(Use `node --trace-warnings
+ * ...`") come ahead of the real error from npm-shipped CLIs like CodeBuddy.
+ * Newer Claude Code reports an unknown model as a one-line signal instead,
+ * "[claude-code:unrecognized_model] {"model":…}", on every run against a relay
+ * model; read as the failure, it turned a timed-out smoke test into "wrong
+ * model" and skipped the direct API check that would have said why.
  */
-const BENIGN_CLI_OUTPUT = /claude\.ai connectors are disabled|doesn't recognize the model|assumes a context window|auto-compact keeps this session|CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT/i;
+const BENIGN_CLI_OUTPUT = /claude\.ai connectors are disabled|doesn't recognize the model|\[claude-code:unrecognized_model\]|assumes a context window|auto-compact keeps this session|CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT|Model metadata for .* not found|Defaulting to fallback metadata|^\s*Reading (prompt|additional input) from stdin|^\s*\d{4}-\d{2}-\d{2}T[\d:.]+Z?\s+(TRACE|DEBUG|INFO|WARN)\s|^\s*\(node:\d+\) (\[\w+\] )?\w*Warning:|^\s*\(Use `node --trace-(warnings|deprecation) \.\.\.`/i;
+
+/**
+ * What a failed socket says went wrong. Node 20+ tries every address a host
+ * resolves to (happy eyeballs); when all of them fail it raises an
+ * AggregateError whose own message is EMPTY, with the reasons on `errors` and
+ * the code on `code`. Read as `e.message` alone that was "": the smoke test
+ * took it for success and crashed on the missing body ("Cannot read
+ * properties of undefined (reading 'slice')"), and a chat run failed with no
+ * reason at all.
+ */
+function networkErrorText(err) {
+  if (!err) return 'unknown network error';
+  if (err.message) return err.message;
+  const inner = Array.isArray(err.errors)
+    ? [...new Set(err.errors.map((e) => e && e.message).filter(Boolean))].join('; ')
+    : '';
+  return inner || err.code || String(err) || 'unknown network error';
+}
+
+// Terminal escape sequences (colour, cursor). A CLI that colours its errors
+// writes them to a pipe too, and quoted into a channel they show as
+// "\x1b[91m\x1b[1mError: \x1b[0m…".
+const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+
+/** `text` with terminal escape sequences removed. */
+function stripAnsi(text) {
+  return String(text || '').replace(ANSI_RE, '');
+}
 
 /** CLI output with the known-harmless lines taken out. */
 function stripCliNoise(text) {
   return String(text || '').split(/\r?\n/).filter((l) => !BENIGN_CLI_OUTPUT.test(l)).join('\n');
 }
 
+/**
+ * Whether a prompt can go to a CLI as one argv element (`-p <prompt>`).
+ * Windows caps a whole command line at 32,767 characters and Node fails the
+ * spawn itself with ENAMETOOLONG — the system prompt plus a large pinned
+ * glossary got there with a one-word message. Linux caps a single argument at
+ * 128 KiB. Both limits leave headroom for quoting and the rest of the argv.
+ * Past it, an adapter sends the prompt over stdin.
+ */
+function promptFitsArgv(prompt, platform = process.platform) {
+  const limit = platform === 'win32' ? 24000 : 100000;
+  return String(prompt || '').length <= limit;
+}
+
 module.exports = {
+  promptFitsArgv,
   SESSION_DEFAULT_RE,
+  networkErrorText,
   BENIGN_CLI_OUTPUT,
   stripCliNoise,
+  stripAnsi,
   decodeConsoleOutput,
   generateSessionTitle,
   formatAttachmentsForPrompt,

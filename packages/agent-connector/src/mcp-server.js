@@ -23,6 +23,7 @@ const _activeTunnels = {};
 // ── Tool definitions ────────────────────────────────────────────────────────
 
 const v11 = require('./tools-v11');
+const collaboration = require('../../agent-collaboration/src');
 
 function buildToolDefs(disabledModules) {
   const tools = [
@@ -225,6 +226,21 @@ function buildToolDefs(disabledModules) {
             text: { type: 'string', description: 'Text to type' },
           },
           required: ['tab_id', 'selector', 'text'],
+        },
+      },
+      {
+        name: 'workspace_browser_upload',
+        description: 'Upload a file or image into a page\'s file input (no file dialog needed). Open the site\'s upload UI first (e.g. Medium "+" → Image) so the input exists. Give a local file path, or a workspace file_id. Max 5 files / 10 MiB. The site may upload immediately; check the page afterwards.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            tab_id: { type: 'string', description: 'Tab ID' },
+            path: { type: 'string', description: 'Path of a local file on this machine to upload' },
+            file_id: { type: 'string', description: 'ID of a workspace shared file to upload (alternative to path)' },
+            selector: { type: 'string', description: 'CSS selector of the file input (default input[type=file])' },
+            frame_selector: { type: 'string', description: 'Optional CSS selector of an iframe containing the input' },
+          },
+          required: ['tab_id'],
         },
       },
       {
@@ -572,6 +588,7 @@ function buildToolDefs(disabledModules) {
 
   // -- v1.1 milestone tools (always on) --
   tools.push(...v11.toolDefs());
+  tools.push(...collaboration.defs);
 
   return tools;
 }
@@ -699,6 +716,8 @@ class McpServer {
   async _dispatch(name, args) {
     const text = (t) => ({ content: [{ type: 'text', text: t }] });
     const image = (data, mime) => ({ content: [{ type: 'image', data, mimeType: mime }] });
+    const collaborationResult = await collaboration.handle(this, name, args);
+    if (collaborationResult !== undefined) return collaborationResult;
 
     switch (name) {
 
@@ -732,7 +751,7 @@ class McpServer {
         const agents = data.agents || data || [];
         if (!agents.length) return text('No agents connected.');
         const lines = agents.map((a) =>
-          `- ${a.name} (${a.type || 'unknown'}) — ${a.status || 'unknown'}${a.role ? ` [${a.role}]` : ''}`
+          `- ${a.agentName} (${a.agentType || 'unknown'}) — ${a.status || 'unknown'}${a.role ? ` [${a.role}]` : ''}${a.description ? `: ${a.description}` : ''}`
         );
         return text(lines.join('\n'));
       }
@@ -906,6 +925,24 @@ class McpServer {
       case 'workspace_browser_type': {
         await this.ws.browserType(this.workspaceId, this.token, args.tab_id, args.selector, args.text, { source: `openagents:${this.agentName}`, channel: this.channelName });
         return text(`Typed into ${args.selector}: ${args.text.slice(0, 50)}${args.text.length > 50 ? '...' : ''}`);
+      }
+
+      case 'workspace_browser_upload': {
+        let file;
+        if (args.path) {
+          const fs = require('fs');
+          const pathMod = require('path');
+          file = { name: pathMod.basename(args.path), data_base64: fs.readFileSync(args.path).toString('base64') };
+        } else if (args.file_id) {
+          file = { file_id: args.file_id };
+        } else {
+          return text('Provide either path (local file) or file_id (workspace file).');
+        }
+        const r = await this.ws.browserUpload(this.workspaceId, this.token, args.tab_id, [file], {
+          selector: args.selector || 'input[type=file]', frame_selector: args.frame_selector,
+          source: `openagents:${this.agentName}`, channel: this.channelName,
+        });
+        return text(`Attached ${(r.files || []).join(', ') || 'file'} to ${args.selector || 'input[type=file]'} (${r.status || 'attached'}). Check the page to confirm the site accepted it.`);
       }
 
       case 'workspace_browser_screenshot': {

@@ -43,6 +43,51 @@ class TestPairingCode:
         assert r.status_code in (401, 403)
 
 
+class TestPairingCodeStatus:
+    def _code(self, client, ws):
+        return client.post(f"/v1/workspaces/{ws['workspaceId']}/pairing-codes", headers=_owner()).json()["data"]["code"]
+
+    def _status(self, client, ws, code, headers=None):
+        return client.get(f"/v1/workspaces/{ws['workspaceId']}/pairing-codes/{code}",
+                          headers=_owner() if headers is None else headers)
+
+    def test_pending_then_redeemed(self, client):
+        ws = _make_workspace(client)
+        code = self._code(client, ws)
+        r = self._status(client, ws, code)
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert data["redeemed"] is False and data["nodeId"] is None and data["expired"] is False
+
+        node_id = client.post("/v1/nodes/redeem", json={"code": code, "node_key": "dev-s"}).json()["data"]["nodeId"]
+        data = self._status(client, ws, code.lower().replace("-", "")).json()["data"]
+        assert data["redeemed"] is True and data["nodeId"] == node_id and data["redeemedAt"]
+
+    def test_repair_of_known_device_is_reported(self, client):
+        """The case a node-list watch misses: the same device, the same node id."""
+        ws = _make_workspace(client)
+        first = client.post("/v1/nodes/redeem", json={"code": self._code(client, ws), "node_key": "dev-r"}).json()["data"]
+        code = self._code(client, ws)
+        again = client.post("/v1/nodes/redeem", json={"code": code, "node_key": "dev-r"}).json()["data"]
+        assert again["nodeId"] == first["nodeId"]
+        data = self._status(client, ws, code).json()["data"]
+        assert data["redeemed"] is True and data["nodeId"] == first["nodeId"]
+
+    def test_expired_code(self, client, db):
+        ws = _make_workspace(client)
+        code = self._code(client, ws)
+        pc = db.query(NodePairingCode).filter_by(code=code.replace("-", "")).one()
+        pc.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        db.commit()
+        assert self._status(client, ws, code).json()["data"]["expired"] is True
+
+    def test_requires_identity_and_hides_unknown(self, client):
+        ws = _make_workspace(client)
+        code = self._code(client, ws)
+        assert self._status(client, ws, code, headers={}).status_code in (401, 403)
+        assert self._status(client, ws, "ZZZZ-ZZZZ").status_code == 404
+
+
 class TestRedeem:
     def test_redeem_registers_node_and_returns_token(self, client):
         ws = _make_workspace(client)
@@ -304,3 +349,63 @@ class TestDeletedWorkspaceRefusesNodes:
 
         r = client.post(f"/v1/nodes/commands/{cmd_id}/result", json={"ok": True}, headers=_tok(ws["token"]))
         assert r.status_code == 404
+
+
+class TestAgentNameCheck:
+    def _check(self, client, ws, node_id, name, headers=None):
+        return client.get(
+            f"/v1/nodes/{node_id}/agent-name",
+            params={"name": name},
+            headers=headers if headers is not None else _tok(ws["device_token"]),
+        )
+
+    def test_free_name_is_available(self, client):
+        ws = _make_workspace(client)
+        node_id = _connect_node(client, ws)
+        r = self._check(client, ws, node_id, "fresh-bot")
+        assert r.status_code == 200
+        assert r.json()["data"] == {"name": "fresh-bot", "available": True, "reason": None}
+
+    def test_blank_name_is_rejected(self, client):
+        ws = _make_workspace(client)
+        node_id = _connect_node(client, ws)
+        r = self._check(client, ws, node_id, "   ")
+        assert r.status_code == 400
+
+    def test_name_on_this_device_is_taken(self, client):
+        ws = _make_workspace(client)
+        node_id = _connect_node(client, ws)
+        roster = [{"name": "coder", "type": "claude", "status": "running"}]
+        client.post("/v1/nodes/heartbeat", json={"node_id": node_id, "agents": roster}, headers=_tok(ws["device_token"]))
+        data = self._check(client, ws, node_id, "coder").json()["data"]
+        assert data["available"] is False and data["reason"] == "on_device"
+
+    def test_name_held_by_another_connection_is_taken(self, client, db):
+        from app.models import WorkspaceMember
+        ws = _make_workspace(client)
+        node_id = _connect_node(client, ws)
+        # A member the device does not know about — e.g. another person's
+        # personal agent, which discovery hides from this viewer.
+        db.add(WorkspaceMember(workspace_id=ws["workspaceId"], agent_name="private-bot", agent_type="claude", status="online"))
+        db.commit()
+        data = self._check(client, ws, node_id, "private-bot").json()["data"]
+        assert data["available"] is False and data["reason"] == "workspace"
+        # And create_agent refuses it for the same reason.
+        r = client.post(
+            f"/v1/nodes/{node_id}/commands",
+            json={"action": "create_agent", "args": {"name": "private-bot", "type": "claude"}},
+            headers=_tok(ws["device_token"]),
+        )
+        assert r.status_code == 403
+
+    def test_requires_connection_access(self, client):
+        ws = _make_workspace(client)
+        node_id = _connect_node(client, ws)
+        assert self._check(client, ws, node_id, "x", headers={}).status_code in (401, 403)
+
+    def test_devices_alias(self, client):
+        ws = _make_workspace(client)
+        node_id = _connect_node(client, ws)
+        r = client.get(f"/v1/devices/{node_id}/agent-name", params={"name": "x"}, headers=_tok(ws["device_token"]))
+        assert r.status_code == 200
+

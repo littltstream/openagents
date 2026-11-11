@@ -7,6 +7,7 @@ import { isRoutineSession, isIssueWorkSession } from '@/lib/conversation-list';
 import React, { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMe } from '@/hooks/use-me';
 import { ApiError, workspaceApi } from './api';
+import { StopRequestTracker, confirmsStop } from './stop-requests';
 import { capture, group } from './analytics';
 import { useOpenAgentsAuth } from './openagents-auth-context';
 import { generateUserId, getStoredIdentity, storeIdentity } from './identity';
@@ -28,6 +29,21 @@ import { forgetWorkspaceSnapshot, readWorkspaceSnapshot, snapshotKey, writeWorks
 import { groupSignals, withoutLocallyRead, type UnreadSignals } from './signals';
 import type { PendingUpload } from '@/hooks/use-upload-queue';
 import type { ApprovalRequest, BrowserPersistentContext, BrowserTab, BrowserTabLimits, DMConversation, KanbanTask, Workflow, WorkflowStep, KnowledgeEntry, NotificationItem, OnlineUser, RoutineDraft, RoutineItem, TodoItem, TrashEntry, Workspace, WorkspaceAgent, WorkspaceFile, WorkspaceIdentity, WorkspaceSession } from './types';
+
+/** Background polls refetch lists that rarely change. A new-but-equal array
+ *  re-renders every consumer of this (unmemoized) context, hidden views
+ *  included, so an unchanged result keeps the array already in state. */
+export function keepIfSame<T>(prev: T, next: T): T {
+  if (prev === next) return prev;
+  try {
+    return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+  } catch {
+    return next;
+  }
+}
+
+/** How often the discovery poll re-lists every file. */
+const FILES_POLL_INTERVAL_MS = 30_000;
 import type { ChannelVisibility } from './types'; // v1.1 M1
 import type { ArtifactVisibility } from './types'; // permission model v1.1
 
@@ -138,6 +154,8 @@ interface LastMessageInfo {
   content: string;
   senderName: string;
   isStatus?: boolean;
+  /** Sender is an agent. Only an agent's message can confirm a stop. */
+  isAgent?: boolean;
 }
 
 interface WorkspaceContextValue {
@@ -162,7 +180,7 @@ interface WorkspaceContextValue {
   monitorMode: boolean;
   acknowledgeCompletion: (sessionId: string) => void;
   agentModes: Record<string, string>;
-  updateLastMessage: (sessionId: string, senderName: string, content: string, isStatus?: boolean) => void;
+  updateLastMessage: (sessionId: string, senderName: string, content: string, isStatus?: boolean, isAgent?: boolean) => void;
   setSessionActive: (sessionId: string, active: boolean) => void;
   updateAgentMode: (agentName: string, mode: string) => void;
   stopAllAgents: (sessionId?: string) => Promise<void>;
@@ -172,6 +190,8 @@ interface WorkspaceContextValue {
   setSelectedFileId: (id: string | null) => void;
   setSelectedKnowledgeId: (id: string | null) => void;
   setCurrentFilePath: (path: string) => void;
+  /** Fork a thread and open the copy; resolves to the new thread's name. */
+  forkSession: (sessionId: string, title?: string) => Promise<string>;
   createSession: (opts?: { title?: string; master?: string; participants?: string[]; humanParticipants?: string[]; resumeFrom?: string; visibility?: ChannelVisibility; directorEmail?: string; groups?: string[] }) => Promise<WorkspaceSession>;
   /** Request that a thread be opened with an agent as soon as it joins — used
    *  by guided onboarding for the user's first agent. */
@@ -242,7 +262,7 @@ interface WorkspaceContextValue {
   createTask: (input: { issueId?: string; title: string; description?: string; status?: KanbanTask['status']; assignee?: string | null; workflowId?: string | null; knowledgeIds?: string[]; fileIds?: string[] }) => Promise<KanbanTask>;
   updateTask: (id: string, updates: { title?: string; description?: string; status?: KanbanTask['status']; position?: number; assignee?: string | null; workflowId?: string | null; knowledgeIds?: string[]; fileIds?: string[] }) => Promise<void>;
   /** Run a task: kicks off the agent (its stored assignee, or the one passed) and moves it to In Progress. */
-  runTask: (id: string, agent?: string) => Promise<void>;
+  runTask: (id: string, agent?: string) => Promise<KanbanTask>;
   /** Stop a running task: halts the agent and returns the card to Backlog. */
   stopTask: (id: string) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
@@ -310,6 +330,14 @@ interface WorkspaceContextValue {
    *  `POST /agents/{agent}/requests` just created) and switch to it. */
   openSessionByChannel: (channel: string) => Promise<void>;
 }
+
+/**
+ * How long a Stop waits for the agent to acknowledge before the UI stops
+ * believing it. The agent normally answers within a second or two; past this
+ * the session is treated as "stop unconfirmed" and the button becomes
+ * clickable again rather than staying disabled forever.
+ */
+const STOP_ACK_TIMEOUT_MS = 12_000;
 
 /** localStorage key for the DM / mention sound (next to `oa_notification_sound`). */
 export const SIGNAL_SOUND_KEY = 'oa_signal_sound';
@@ -482,6 +510,10 @@ export function WorkspaceProvider({
   const [stoppingSessionIds, setStoppingSessionIds] = useState<Set<string>>(new Set());
   const stoppingSessionIdsRef = useRef(stoppingSessionIds);
   stoppingSessionIdsRef.current = stoppingSessionIds;
+  // Ownership of each session's in-flight Stop. Its retry and give-up timers
+  // only act while the session still belongs to that Stop, so a first click's
+  // timers cannot clear the state of a second, unrelated click.
+  const stopRequestsRef = useRef(new StopRequestTracker());
   const [completedSessionIds, setCompletedSessionIds] = useState<Set<string>>(new Set());
   const [agentModes, setAgentModes] = useState<Record<string, string>>({});
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
@@ -496,8 +528,10 @@ export function WorkspaceProvider({
   const filesEpochRef = useRef(0);
   const commitFiles = useCallback((next: WorkspaceFile[], epoch: number) => {
     if (epoch !== filesEpochRef.current) return;
-    setFiles(next);
+    setFiles(prev => keepIfSame(prev, next));
   }, []);
+  /** When the discovery poll last re-listed every file (see refreshDiscovery). */
+  const filesPolledAtRef = useRef(0);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [selectedKnowledgeId, setSelectedKnowledgeId] = useState<string | null>(null);
   useEffect(() => {
@@ -689,8 +723,12 @@ export function WorkspaceProvider({
     };
   }, [currentUser.id, currentUser.name]);
 
-  const updateLastMessage = useCallback((sessionId: string, senderName: string, content: string, isStatus?: boolean) => {
-    if (!isStatus || /stopped|stopping failed/i.test(content)) {
+  const updateLastMessage = useCallback((sessionId: string, senderName: string, content: string, isStatus?: boolean, isAgent?: boolean) => {
+    // Only the agent can confirm a stop. Treating any non-status message as
+    // confirmation let the user's own just-sent message clear the latch and
+    // cancel the retry and give-up timers, with nothing actually stopped.
+    if (confirmsStop({ isAgent, isStatus, content })) {
+      stopRequestsRef.current.release(sessionId);
       setStoppingSessionIds((prev) => {
         if (!prev.has(sessionId)) return prev;
         const next = new Set(prev);
@@ -734,6 +772,21 @@ export function WorkspaceProvider({
       : Array.from(activeSessionIds);
     if (sessionIds.length === 0) return;
 
+    const session = targetSessionId ? sessions.find((s) => s.sessionId === targetSessionId) : null;
+    const participants = session?.participants || [];
+    // Deliberately NOT falling back to every agent when the participant list is
+    // missing. Several adapters still ignore the channel a stop names and stop
+    // everything they are running, so broadcasting would let one thread's Stop
+    // kill an uninvolved agent's work in another thread.
+    const targetAgents = targetSessionId
+      ? agents.filter((a) => participants.includes(a.agentName))
+      : agents;
+
+    // Resolved BEFORE anything is shown as stopping. With no agent to ask,
+    // nothing would ever acknowledge, and flipping the UI first would strand
+    // the thread with no Stop button and a preview frozen at "Stopping...".
+    if (targetAgents.length === 0) return;
+
     setStoppingSessionIds((prev) => {
       const next = new Set(prev);
       sessionIds.forEach((sid) => next.add(sid));
@@ -752,12 +805,7 @@ export function WorkspaceProvider({
       return next;
     });
 
-    const targetAgents = targetSessionId
-      ? agents.filter((a) => {
-          const session = sessions.find((s) => s.sessionId === targetSessionId);
-          return session && (session.participants || []).includes(a.agentName);
-        })
-      : agents;
+    const generation = stopRequestsRef.current.claim(sessionIds);
 
     const sendStop = () => Promise.allSettled(
       targetAgents.map((a) => {
@@ -767,13 +815,42 @@ export function WorkspaceProvider({
     );
     await sendStop();
 
+    /** Sessions this particular Stop still owns — a later Stop takes them over. */
+    const stillOurs = () => stopRequestsRef.current.owned(sessionIds, generation);
+
     window.setTimeout(() => {
+      const ours = stillOurs();
+      if (ours.length === 0) return;
       setStoppingSessionIds((prevStopping) => {
-        const stillStopping = sessionIds.filter((sid) => prevStopping.has(sid));
+        const stillStopping = ours.filter((sid) => prevStopping.has(sid));
         if (stillStopping.length > 0) void sendStop();
         return prevStopping;
       });
     }, 3000);
+
+    window.setTimeout(() => {
+      const ours = stillOurs();
+      if (ours.length === 0) return;
+      ours.forEach((sid) => stopRequestsRef.current.release(sid));
+      // Read once, before either setState — the ref tracks rendered state, so
+      // deciding this inside an updater would depend on commit ordering.
+      const unconfirmed = ours.filter((sid) => stoppingSessionIdsRef.current.has(sid));
+      if (unconfirmed.length === 0) return;
+      // The stop was never acknowledged. Release the latch AND put the session
+      // back to active: clearing the latch alone would just hide the button,
+      // since it renders on active-or-stopping. This returns it to a clickable
+      // "Stop" so the user can retry.
+      setStoppingSessionIds((prev) => {
+        const next = new Set(prev);
+        unconfirmed.forEach((sid) => next.delete(sid));
+        return next;
+      });
+      setActiveSessionIds((prev) => {
+        const next = new Set(prev);
+        unconfirmed.forEach((sid) => next.add(sid));
+        return next;
+      });
+    }, STOP_ACK_TIMEOUT_MS);
   }, [activeSessionIds, agents, sessions]);
 
   // Configure API client on mount
@@ -842,7 +919,8 @@ export function WorkspaceProvider({
   const refreshDiscovery = useCallback(async () => {
     try {
       const discovery = await workspaceApi.discover(lastReadRef.current);
-      setAgents(discovery.agents.map(networkAgentToWorkspaceAgent));
+      const nextAgents = discovery.agents.map(networkAgentToWorkspaceAgent);
+      setAgents(prev => keepIfSame(prev, nextAgents));
 
       const updated = discovery.channels.map((ch) =>
         networkChannelToSession(ch, workspaceId)
@@ -886,9 +964,10 @@ export function WorkspaceProvider({
               starred: remote.starred,
               pinned: remote.pinned,
               isChannel: remote.isChannel,
+              forkedFrom: remote.forkedFrom,
             };
           });
-        return [...merged, ...newChannels];
+        return keepIfSame(prev, [...merged, ...newChannels]);
       });
 
       // Detect channels with new activity and fetch their latest message preview
@@ -934,13 +1013,15 @@ export function WorkspaceProvider({
                 sort: 'desc',
                 limit: 10,
               });
-              if (result.events.length === 0) return null;
-              const latest = result.events[0];
+              // Queue-cancel signals are bookkeeping, never a preview.
+              const events = result.events.filter((e) => (e.payload as Record<string, string>)?.message_type !== 'queue_cancel');
+              if (events.length === 0) return null;
+              const latest = events[0];
               const latestPayload = latest.payload as Record<string, string>;
               const latestType = latestPayload?.message_type || 'chat';
               const isAgentWorking = latestType === 'status' || latestType === 'thinking';
               // Find the latest chat/thinking message (not status) for preview
-              const lastChat = result.events.find((e) => {
+              const lastChat = events.find((e) => {
                 const mt = (e.payload as Record<string, string>)?.message_type || 'chat';
                 return mt !== 'status' && mt !== 'thinking';
               });
@@ -966,7 +1047,8 @@ export function WorkspaceProvider({
                   content: reply.payload?.content as string,
                 });
               }
-              return { sessionId: ch.sessionId, senderName: sender, content, isStatus };
+              const isAgent = (pick.source || '').startsWith('openagents:');
+              return { sessionId: ch.sessionId, senderName: sender, content, isStatus, isAgent };
             } catch { /* ignore */ }
             return null;
           })
@@ -975,7 +1057,7 @@ export function WorkspaceProvider({
         for (let i = 0; i < previews.length; i++) {
           const p = previews[i];
           if (p && p.content) {
-            batch[p.sessionId] = { senderName: p.senderName, content: p.content.slice(0, 100), isStatus: p.isStatus };
+            batch[p.sessionId] = { senderName: p.senderName, content: p.content.slice(0, 100), isStatus: p.isStatus, isAgent: p.isAgent };
           }
           // Mark timestamp as known only after successful fetch (so failures retry next poll)
           if (p) {
@@ -995,6 +1077,7 @@ export function WorkspaceProvider({
               if (info.isStatus) {
                 if (isStopping) {
                   if (/stopped|stopping failed/i.test(info.content)) {
+                    stopRequestsRef.current.release(sid);
                     setStoppingSessionIds((s) => {
                       if (!s.has(sid)) return s;
                       const next = new Set(s);
@@ -1007,12 +1090,15 @@ export function WorkspaceProvider({
                   newActive.add(sid);
                 }
               } else {
-                setStoppingSessionIds((s) => {
-                  if (!s.has(sid)) return s;
-                  const next = new Set(s);
-                  next.delete(sid);
-                  return next;
-                });
+                if (confirmsStop({ isAgent: info.isAgent, isStatus: false, content: info.content })) {
+                  stopRequestsRef.current.release(sid);
+                  setStoppingSessionIds((s) => {
+                    if (!s.has(sid)) return s;
+                    const next = new Set(s);
+                    next.delete(sid);
+                    return next;
+                  });
+                }
                 // Latest event is a real message — session is not working.
                 // Always clear active so the shimmer doesn't stick when the
                 // status→chat transition happens between polls or while
@@ -1034,16 +1120,27 @@ export function WorkspaceProvider({
       }
 
       // Also refresh files, browser tabs, persistent contexts, and DM conversations so sidebar counts stay current
-      const filesEpoch = filesEpochRef.current;
-      workspaceApi.listFiles().then((r) => commitFiles(r.files, filesEpoch)).catch(() => {});
-      workspaceApi.listBrowserTabs().then((r) => { setBrowserTabs(r.tabs); if (r.limits) setBrowserTabLimits(r.limits); }).catch(() => {});
-      workspaceApi.listBrowserContexts().then((r) => setBrowserContexts(r.contexts)).catch(() => {});
+      //
+      // The file list is the expensive one: a page per 200 files, re-listed
+      // in full. Every 5 s while agents work, on a workspace with thousands of
+      // files, that kept the network busy and re-rendered the whole app each
+      // time. Explicit refreshFiles() calls (uploads, deletes, the refresh
+      // button) are not throttled; only this background poll is.
+      // Unchanged lists keep their old array (keepIfSame), so a poll that
+      // finds nothing new re-renders nothing.
+      if (Date.now() - filesPolledAtRef.current >= FILES_POLL_INTERVAL_MS) {
+        filesPolledAtRef.current = Date.now();
+        const filesEpoch = filesEpochRef.current;
+        workspaceApi.listFiles().then((r) => commitFiles(r.files, filesEpoch)).catch(() => {});
+      }
+      workspaceApi.listBrowserTabs().then((r) => { setBrowserTabs(prev => keepIfSame(prev, r.tabs)); if (r.limits) setBrowserTabLimits(prev => keepIfSame(prev, r.limits!)); }).catch(() => {});
+      workspaceApi.listBrowserContexts().then((r) => setBrowserContexts(prev => keepIfSame(prev, r.contexts))).catch(() => {});
       workspaceApi.listConversations(undefined, lastReadRef.current).then(receiveDMConversations).catch(() => {});
-      workspaceApi.listTodos().then((r) => setTodos(r.todos)).catch(() => {});
-      workspaceApi.listTasks().then((r) => setTasks(r.tasks)).catch(() => {});
-      workspaceApi.listWorkflows().then((r) => setWorkflows(r.workflows)).catch(() => {});
-      workspaceApi.listRoutines().then((r) => setRoutines(r.routines)).catch(() => {});
-      workspaceApi.listKnowledge().then((r) => setKnowledge(r.entries)).catch(() => {});
+      workspaceApi.listTodos().then((r) => setTodos(prev => keepIfSame(prev, r.todos))).catch(() => {});
+      workspaceApi.listTasks().then((r) => setTasks(prev => keepIfSame(prev, r.tasks))).catch(() => {});
+      workspaceApi.listWorkflows().then((r) => setWorkflows(prev => keepIfSame(prev, r.workflows))).catch(() => {});
+      workspaceApi.listRoutines().then((r) => setRoutines(prev => keepIfSame(prev, r.routines))).catch(() => {});
+      workspaceApi.listKnowledge().then((r) => setKnowledge(prev => keepIfSame(prev, r.entries))).catch(() => {});
       workspaceApi.listNotifications().then((r) => {
         setNotifications(r.notifications);
         setNotificationsLoaded(true);
@@ -1110,6 +1207,7 @@ export function WorkspaceProvider({
   const runTask = useCallback(async (id: string, agent?: string) => {
     const task = await workspaceApi.assignTask(id, agent);
     setTasks((prev) => prev.map((t) => (t.id === id ? task : t)));
+    return task;
   }, []);
 
   const stopTask = useCallback(async (id: string) => {
@@ -1623,6 +1721,7 @@ export function WorkspaceProvider({
         // These panels and previews fill in after the workspace is usable.
         // A slow browser or file store must not hold the full-page spinner.
         const filesEpoch = filesEpochRef.current;
+        filesPolledAtRef.current = Date.now();
         loadOptional(workspaceApi.listFiles(), (r) => commitFiles(r.files, filesEpoch));
         loadOptional(workspaceApi.listTrash(), (r) => setTrashEntries(r.entries));
         loadOptional(workspaceApi.listBrowserTabs(), (r) => { setBrowserTabs(r.tabs); if (r.limits) setBrowserTabLimits(r.limits); });
@@ -1894,6 +1993,14 @@ export function WorkspaceProvider({
     return session;
   }, [agents, currentUser.id]);
 
+  const forkSession = useCallback(async (sessionId: string, title?: string) => {
+    const fork = await workspaceApi.forkChannel(sessionId, title);
+    capture('thread_forked', {});
+    await refreshDiscovery();
+    setCurrentSessionId(fork.name);
+    return fork.name;
+  }, [refreshDiscovery, setCurrentSessionId]);
+
   // Guided onboarding: after the user's first agent is connected, open a thread
   // with it automatically once it joins the workspace. One-shot; only ever set
   // by the onboarding flow, so it never fires when adding agents later.
@@ -2153,6 +2260,7 @@ export function WorkspaceProvider({
         currentFilePath,
         setCurrentFilePath,
         createSession,
+        forkSession,
         requestFirstThread,
         renameSession,
         updateSession,

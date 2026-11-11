@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Archive, ArchiveRestore, ArrowDownAZ, ArrowDownWideNarrow, CheckCircle2, Hash, Loader2, Lock,
-  MessageCircle, MessageSquare, MessageSquarePlus, MoreVertical, Pencil, Pin, PinOff, Plus, RefreshCw, Search,
+  GitFork, MessageCircle, MessageSquare, MessageSquarePlus, MoreVertical, Pencil, Pin, PinOff, Plus, RefreshCw, Search,
   SlidersHorizontal, Star, Trash2, User, Users, Bot, Wrench, X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -12,6 +12,7 @@ import { channelSessions, isIssueWorkSession, isRoutineSession, mergeConversatio
 import { agentLabel } from '@/lib/helpers';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useLayout } from '@/components/layout/layout-context';
+import { ListToggleButton } from '@/components/layout/list-collapse-button';
 import { useFormatters, useT, type MessageKey } from '@/lib/i18n';
 import { AgentAvatar } from '@/components/agents/agent-avatar';
 import { workspaceApi } from '@/lib/api';
@@ -323,7 +324,7 @@ function ThreadRow({
 export function ThreadList() {
   const {
     sessions, currentSessionId, setCurrentSessionId, agents, lastMessageBySession,
-    activeSessionIds, completedSessionIds, updateSession, renameSession, dmConversations,
+    activeSessionIds, completedSessionIds, updateSession, renameSession, forkSession, dmConversations,
     unreadSessionIds, unreadThreadCounts, unreadDmSessionIds, unreadDmCounts, unreadSignals, refreshAgents, refreshDMConversations, currentUser, onlineUsers,
   } = useWorkspace();
   const me = myAddress(currentUser);
@@ -607,6 +608,27 @@ export function ThreadList() {
         >
           <Pencil className="size-4" />
           <span>{t('common.rename')}</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={async (e) => {
+            e.stopPropagation();
+            const title = (await prompt({
+              title: t('threads.forkTitle'),
+              description: t('threads.forkDescription'),
+              placeholder: t('threads.renamePlaceholder'),
+              defaultValue: `${session.title || t('threads.untitled')} (fork)`,
+              confirmText: t('threads.fork'),
+            }))?.trim();
+            if (!title) return;
+            try {
+              await forkSession(session.sessionId, title);
+            } catch {
+              toast.error(t('chat.forkThreadFailed'));
+            }
+          }}
+        >
+          <GitFork className="size-4" />
+          <span>{t('threads.forkMenu')}</span>
         </DropdownMenuItem>
         <DropdownMenuItem onClick={(e) => {
           e.stopPropagation();
@@ -935,8 +957,9 @@ export function ThreadList() {
     <div className="flex h-full flex-col bg-background">
       {/* ── Header ── */}
       <div className="flex h-(--header-height) shrink-0 items-center justify-between gap-2 border-b border-border px-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="text-sm leading-relaxed font-semibold">{t('threads.title')}</span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <ListToggleButton className="-ml-1 shrink-0 text-muted-foreground" />
+          <span className="truncate text-sm leading-relaxed font-semibold">{t('threads.title')}</span>
           {/* Unread threads, in the app-shell-4 outlined-count style. Hidden at
               zero — a "0" beside the title is noise, not information. */}
           {unreadCount > 0 && (
@@ -944,15 +967,13 @@ export function ThreadList() {
               {unreadCount}
             </Badge>
           )}
-          {/* Primary action sits beside the title, where the eye lands —
-              not in the right corner, where it went unnoticed. */}
-          <Button size="sm" className="ml-1 shrink-0 gap-1.5 font-semibold" onClick={openNewThread}>
-            <Plus className="size-4" />
-            {t('threads.newThread')}
-          </Button>
         </div>
 
         <div className="flex shrink-0 items-center gap-0.5">
+          <Button size="sm" className="mr-1 shrink-0 gap-1.5 font-semibold" onClick={openNewThread}>
+            <Plus className="size-4" />
+            {t('threads.newThread')}
+          </Button>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -969,16 +990,21 @@ export function ThreadList() {
           </Tooltip>
 
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                mode="icon" size="sm"
-                aria-label={t('threads.sort')}
-                className="text-muted-foreground"
-              >
-                <SlidersHorizontal className="size-3.5" />
-              </Button>
-            </DropdownMenuTrigger>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    mode="icon" size="sm"
+                    aria-label={t('threads.sort')}
+                    className="text-muted-foreground"
+                  >
+                    <SlidersHorizontal className="size-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent>{t('threads.sort')}</TooltipContent>
+            </Tooltip>
             <DropdownMenuContent align="end" className="w-48">
               <DropdownMenuLabel className="text-xs text-muted-foreground">
                 {t('threads.sortBy')}

@@ -1,7 +1,8 @@
 'use client';
 import { appPath } from '@/lib/app-path';
-
-import { FirstDeviceHint, SETUP_STEP_BUTTON } from './first-device-hint';
+import { useOnboardingSurface, useDismissOnboarding } from './onboarding-surface';
+import { FirstDeviceHint } from './first-device-hint';
+import { ConnectAgentButton } from './connect-agent-button';
 import { useFirstDeviceGuide } from '@/hooks/use-first-device-guide';
 import { MoreAgents } from './more-agents';
 import { AgentSectionLabel } from './agent-section-label';
@@ -11,7 +12,7 @@ import * as React from 'react';
 import Image from 'next/image';
 import {
   BookOpen, Bot, CircleDot, CalendarClock, ChevronDown, ChevronLeft, ChevronRight, FileText, Globe,
-  Inbox, KanbanSquare, MessageSquare, Settings, PlusSquare, Sparkles, Users, Waypoints,
+  Inbox, KanbanSquare, MessageSquare, Settings, Sparkles, Users, Waypoints,
 } from 'lucide-react';
 import {
   Sidebar,
@@ -37,6 +38,7 @@ import { useHumanNames } from '@/hooks/use-team-roster';
 import { agentPresence } from '@/lib/approvals';
 import { useWorkspace } from '@/lib/workspace-context';
 import { dmSessionId, myAddress } from '@/lib/dm';
+import { unreadIssueCounts } from '@/lib/signals';
 import { useT } from '@/lib/i18n';
 import {
   useLayout,
@@ -57,6 +59,8 @@ interface RailItem {
   icon: React.ReactNode;
   /** Show an attention dot — unread threads, unread notifications */
   count?: number;
+  /** Render the count in red (something needs the user). */
+  urgent?: boolean;
 }
 
 const RAIL_SNAP_POINT = (RAIL_WIDTH_COLLAPSED + RAIL_WIDTH_EXPANDED) / 2;
@@ -203,12 +207,13 @@ function RailResizeHandle() {
  */
 export function NavRail() {
   const {
-    viewMode, openView, setSelectedAgentName, isRailExpanded, railDragWidth, setThreadFilter, openMobileDetail,
+    viewMode, railViewMode, openView, setSelectedAgentName, isRailExpanded, railDragWidth, setThreadFilter, openMobileDetail,
   } = useLayout();
   const {
     workspace, agents, unreadThreadsTotal, unreadNotificationCount, pendingApprovalsByAgent,
-    onlineUsers, currentUser, tasks, setCurrentSessionId, unreadDmCounts, dmConversations,
+    onlineUsers, currentUser, setCurrentSessionId, unreadDmCounts, dmConversations, unreadSignals,
   } = useWorkspace();
+  const unreadIssues = Object.values(unreadIssueCounts(unreadSignals)).reduce((sum, n) => sum + n, 0);
   const t = useT();
   const [agentsOpen, setAgentsOpen] = React.useState(true);
   // The agent row under the pointer whose name is cut off, if any: with
@@ -218,7 +223,7 @@ export function NavRail() {
   const recentAgents = sidebarAgents(agents, currentUser.id);
   // Yumi (built-in) still appears in the roster, but does not satisfy the
   // "connect your first agent" call to action.
-  const hasAgents = recentAgents.filter((a) => !a.builtin).length > 0;
+  const hasConnectedAgents = agents.some((a) => !a.builtin);
   const onlineAgents = recentAgents.filter((a) => a.status === 'online');
   const groups = sidebarAgentGroups(agents, currentUser.id, dmConversations);
   const visibleAgents = groups.flatMap(group => group.shown);
@@ -237,7 +242,13 @@ export function NavRail() {
       icon: <MessageSquare />,
       count: unreadThreadsTotal,
     },
-    { mode: 'issues', label: t('views.issues'), icon: <CircleDot />, count: tasks.filter(task => task.status === 'need_input').length },
+    {
+      mode: 'issues',
+      label: t('views.issues'),
+      icon: <CircleDot />,
+      count: unreadIssues,
+      urgent: true,
+    },
     { mode: 'files', label: t('views.files'), icon: <FileText /> },
     { mode: 'browser', label: t('views.browser'), icon: <Globe /> },
     { mode: 'routines', label: t('views.routines'), icon: <CalendarClock /> },
@@ -255,10 +266,12 @@ export function NavRail() {
     { mode: 'agents', label: t('collab.viewAgents'), icon: <Bot /> },
   ];
 
-  const isConnectActive = viewMode === 'connect';
+  const onboarding = useOnboardingSurface();
+  const dismissOnboarding = useDismissOnboarding();
+  const isConnectActive = onboarding || viewMode === 'connect';
   const setupStep = useFirstDeviceGuide();
   const showFirstDeviceHint = !!setupStep && !isConnectActive;
-  const connectLabel = setupStep === 'device' || hasAgents ? t('nav.connectAgent') : t('nav.connectFirstAgent');
+  const connectLabel = hasConnectedAgents ? t('nav.manageAgents') : t('nav.connectFirstAgent');
   const workspaceLabel = workspace?.name || t('nav.workspaceFallback');
 
   // Mid-drag the rail previews the state it would snap to, so labels appear
@@ -343,15 +356,15 @@ export function NavRail() {
                     className={cn('relative', !showLabels && 'justify-center!')}
                     aria-label={item.label}
                     tooltip={{ children: item.label, hidden: showLabels }}
-                    isActive={viewMode === item.mode || (viewMode === 'tasks' && item.mode === 'issues')}
-                    onClick={() => { if (item.mode === 'threads') setThreadFilter('all'); openView(item.mode); }}
+                    isActive={!onboarding && railViewMode === item.mode}
+                    onClick={() => { if (item.mode === 'threads') { if (onboarding) dismissOnboarding?.(); setThreadFilter('all'); } openView(item.mode); }}
                   >
                     {item.icon}
                     {showLabels && <span className="truncate">{item.label}</span>}
                     {/* Collapsed, the badge sits inside the button's corner: the button
                         (and the scrolling rail) clip overflow, so a negative
                         offset cut it in half. */}
-                    {!!item.count && <span className={cn('flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-medium tabular-nums', showLabels ? 'ml-auto' : 'absolute right-0 top-0', (item.mode === 'inbox' || item.mode === 'threads') ? 'bg-destructive text-white' : 'bg-muted text-foreground')} aria-label={t('nav.unreadCount', { count: item.count })}>{item.count > 99 ? '99+' : item.count}</span>}
+                    {!!item.count && <span className={cn('flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-medium tabular-nums', showLabels ? 'ml-auto' : 'absolute right-0 top-0', (item.urgent || item.mode === 'inbox' || item.mode === 'threads') ? 'bg-destructive text-white' : 'bg-muted text-foreground')} aria-label={t('nav.unreadCount', { count: item.count })}>{item.count > 99 ? '99+' : item.count}</span>}
 
                   </SidebarMenuButton>
                 </SidebarMenuItem>
@@ -417,7 +430,7 @@ export function NavRail() {
                           setSelectedAgentName(null);
                           setCurrentSessionId(dmSessionId(myAddress(currentUser), `openagents:${agent.agentName}`));
                           openView('threads');
-                          setThreadFilter('dms');
+                          setThreadFilter('all');
                           openMobileDetail();
                         }}
                       >
@@ -459,22 +472,12 @@ export function NavRail() {
         {showFirstDeviceHint && setupStep && <FirstDeviceHint step={setupStep} compact={!showLabels} />}
         <SidebarMenu className="gap-0.5">
           <SidebarMenuItem>
-            <SidebarMenuButton
-              className={cn(
-                !showLabels && 'justify-center!',
-                showFirstDeviceHint && SETUP_STEP_BUTTON,
-                !hasAgents && !showFirstDeviceHint &&
-                  !isConnectActive &&
-                  'bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary',
-              )}
-              aria-label={connectLabel}
-              tooltip={{ children: connectLabel, hidden: showLabels }}
-              isActive={isConnectActive}
+            <ConnectAgentButton
+              label={connectLabel}
+              active={isConnectActive}
+              showLabels={showLabels}
               onClick={() => openView('connect')}
-            >
-              <PlusSquare />
-              {showLabels && <span className="truncate">{connectLabel}</span>}
-            </SidebarMenuButton>
+            />
           </SidebarMenuItem>
         </SidebarMenu>
 

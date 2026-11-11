@@ -15,7 +15,7 @@ RUN sed -i \
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt -i https://mirrors.cloud.tencent.com/pypi/simple
+RUN pip install --no-cache-dir -r requirements.txt 'PyYAML>=6.0' -i https://mirrors.cloud.tencent.com/pypi/simple
 
 # Production uses Browser Fabric (cloud) via BROWSERFABRIC_API_KEY — all
 # browser operations are proxied via REST API, no local Chromium needed.

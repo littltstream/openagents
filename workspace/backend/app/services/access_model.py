@@ -413,6 +413,26 @@ def workspace_human_roles(db: Session, workspace: Workspace) -> Dict[str, str]:
     return out
 
 
+def workspace_human_role(db: Session, workspace: Workspace, email: Optional[str]) -> Optional[str]:
+    """One person's entry from workspace_human_roles, without loading everyone."""
+    email = _norm(email)
+    if not email:
+        return None
+    role = db.execute(
+        select(WorkspaceMembership.role)
+        .join(User, WorkspaceMembership.user_id == User.id)
+        .where(WorkspaceMembership.workspace_id == workspace.id, func.lower(User.email) == email)
+        .limit(1)
+    ).scalar()
+    if role:
+        return role
+    for c in (workspace.collaborators or []):
+        if _norm(c.email) == email:
+            r = c.role or "editor"
+            return "member" if r == "editor" else ("guest" if r == "guest" else "viewer")
+    return "owner" if _norm(workspace.creator_email) == email else None
+
+
 def group_members(db: Session, workspace: Workspace, group: SecurityGroup) -> List[dict]:
     """Members of a group: explicit rows for custom groups; derived for the
     builtins (everyone = all humans + all agents; guest = humans with role
@@ -815,6 +835,15 @@ def thread_shared_agent_names(db: Session, workspace_id: str, principal: Princip
     email = principal.owner_email if principal.is_agent else principal.email
     if not email:
         return set()
+    # Few workspaces opt in at all. Probe for that first: PostgreSQL spends far
+    # longer planning the seven-way join below than executing it.
+    if db.execute(
+        select(ChannelAgentSharing.channel_id)
+        .join(Channel, Channel.id == ChannelAgentSharing.channel_id)
+        .where(Channel.workspace_id == str(workspace_id), ChannelAgentSharing.enabled.is_(True))
+        .limit(1)
+    ).first() is None:
+        return set()
     recipient = aliased(ChannelHumanMember)
     owner = aliased(ChannelHumanMember)
     return set(db.execute(
@@ -944,6 +973,14 @@ def hidden_channel_names(db: Session, workspace_id: str, principal: Principal) -
     """Private channels this principal may NOT see. Empty for machines."""
     if principal.machine:
         return set()
+    from app.services.permission_cache import cached
+    # Every principal attribute the computation reads joins the key.
+    identity = [principal.kind, principal.email, principal.role, principal.agent_name, principal.owner_email]
+    return set(cached(db, "hidden-channels", workspace_id, identity,
+                      lambda: sorted(_hidden_channel_names(db, workspace_id, principal))))
+
+
+def _hidden_channel_names(db: Session, workspace_id: str, principal: Principal) -> Set[str]:
     wid = str(workspace_id)
     private = db.execute(
         select(Channel.id, Channel.name, Channel.owner_email).where(

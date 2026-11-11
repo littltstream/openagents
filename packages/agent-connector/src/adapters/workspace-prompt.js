@@ -13,6 +13,7 @@
 
 const crypto = require('crypto');
 const { renderPinnedDecisions } = require('./decision-log');
+const { buildCollaborationSection, buildCliSection } = require('../../../agent-collaboration/src');
 
 /**
  * Strong directive forcing agents to use the workspace browser when the
@@ -176,7 +177,7 @@ function buildCollaborationPrompt(toolMode = 'mcp', skillName = 'openagents-work
     )
     : (
       'Before delegating, discover who is available and what they do: call ' +
-      '`workspace_get_agents`, or the discover endpoint for full descriptions, ' +
+      '`workspace_discover_agents` for full descriptions, ' +
       'and match the task to an agent\'s description before @mentioning it.\n'
     );
   return (
@@ -188,6 +189,7 @@ function buildCollaborationPrompt(toolMode = 'mcp', skillName = 'openagents-work
     'to do work. When the task is complete, report results to the user ' +
     'without @mentioning other agents.\n\n' +
     discover +
+    buildCollaborationSection(toolMode) +
     buildHandoffPrompt(toolMode) +
     buildBriefAndDirectorPrompt(toolMode)
   );
@@ -468,6 +470,14 @@ function buildApiSkillsPrompt({ endpoint, workspaceId, token, agentName, channel
         `\`${curl} -s -X POST -H "${h}" -H "Content-Type: application/json"` +
         ` ${baseUrl}/v1/browser/tabs/{tab_id}/press_key` +
         ` -d '{"key":"Enter","source":"openagents:${agentName}","channel":"${channelName}"}'\`\n\n` +
+        '**Upload a file or image** into the page (no file dialog needed). First open the site\'s upload UI ' +
+        '(e.g. Medium "+" → Image) so its file input exists, then attach a workspace file by `file_id` ' +
+        '(upload it to Files first) or inline bytes with `name` + `data_base64`. Max 5 files / 10 MiB:\n' +
+        `\`${curl} -s -X POST -H "${h}" -H "Content-Type: application/json"` +
+        ` ${baseUrl}/v1/browser/tabs/{tab_id}/upload` +
+        ` -d '{"selector":"input[type=file]","files":[{"file_id":"FILE_ID"}],"source":"openagents:${agentName}","channel":"${channelName}"}'\`\n` +
+        'The site sees a normal file pick and may upload immediately; check the page afterwards. ' +
+        'Use this instead of clipboard paste or image-URL import, which fail in the cloud browser.\n\n' +
         '**Run JavaScript** in the page (returns the result):\n' +
         `\`${curl} -s -X POST -H "${h}" -H "Content-Type: application/json"` +
         ` ${baseUrl}/v1/browser/tabs/{tab_id}/evaluate` +
@@ -524,6 +534,12 @@ function buildApiSkillsPrompt({ endpoint, workspaceId, token, agentName, channel
       'Create or update your to-do list to track progress. The entire list ' +
       'is replaced each time (send the full list with current statuses).\n\n' +
       '**Status values:** `pending`, `in_progress`, `completed`\n\n' +
+      'Use `in_progress` only for work you can actively execute now. Before ending a turn, ' +
+      'move tasks waiting for human input, approval, login, or dependencies back to `pending`. ' +
+      'Set the actual assignee when another person or agent owns the next action. ' +
+      'Only your own `in_progress` tasks may automatically continue after a reply; ' +
+      'pending tasks stay visible but do not wake you. When the required input arrives, ' +
+      'mark the relevant task `in_progress` and resume it.\n\n' +
       '**Update your to-do list:**\n' +
       `\`${curl} -s -X PUT -H "${h}" -H "Content-Type: application/json" ` +
       `${baseUrl}/v1/todos -d '{"todos":[` +
@@ -532,7 +548,7 @@ function buildApiSkillsPrompt({ endpoint, workspaceId, token, agentName, channel
       `],"network":"${workspaceId}","channel":"${channelName}",` +
       `"source":"openagents:${agentName}"}'\`\n\n` +
       '**Get your to-do list:**\n' +
-      `\`${curl} -s -H "${h}" "${baseUrl}/v1/todos?network=${workspaceId}&channel=${channelName}"\`\n\n` +
+      `\`${curl} -s -H "${h}" "${baseUrl}/v1/todos?network=${workspaceId}&channel=${channelName}&source=openagents%3A${encodeURIComponent(agentName)}"\`\n\n` +
       '**IMPORTANT:** When you receive a task with multiple steps or a list of things to do, ' +
       'ALWAYS create a to-do list first before starting work. This lets the user see your ' +
       'progress in real time. Update statuses as you work through each item.\n' +
@@ -694,6 +710,7 @@ function buildApiSkillsPrompt({ endpoint, workspaceId, token, agentName, channel
     'so cross-reference `participants` yourself as shown.)\n'
   );
 
+  sections.push(buildCliSection({ endpoint, workspaceId, agentName, channelName, mode, isWindows }));
   return sections.join('\n');
 }
 
@@ -1035,7 +1052,7 @@ function buildOpenWorkerSystemPrompt({ agentName, workspaceId, channelName, endp
  * constant sentence on the command line. Two consequences shape this function:
  *
  *  - The workspace token must NEVER appear. `tokenExpr` is a SHELL EXPRESSION
- *    (`$OPENAGENTS_WORKSPACE_TOKEN`, or `$env:OPENAGENTS_WORKSPACE_TOKEN` on
+ *    (`$OPENAGENTS_WORKSPACE_AUTH`, or `$env:OPENAGENTS_WORKSPACE_AUTH` on
  *    Windows) that the agent expands at run time from the child environment.
  *    Passing the real token here would put it on disk for no benefit — and the
  *    guard below makes that a loud failure rather than a silent leak.
@@ -1044,17 +1061,52 @@ function buildOpenWorkerSystemPrompt({ agentName, workspaceId, channelName, endp
  *    is therefore part of the task itself rather than something the agent can
  *    be expected to remember.
  */
+/** Quote a path as a PowerShell single-quoted literal. */
+function psQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+/**
+ * How a DeepSeek Harness run on Windows reaches the workspace API.
+ *
+ * dsh's Windows sandbox gives shell commands a token with no Schannel
+ * credentials, so the `curl` recipes above fail every HTTPS request
+ * (SEC_E_NO_CREDENTIALS) and so does Invoke-WebRequest. Node's TLS works, so the
+ * calls go through deepseek-workspace-api.js on the adapter's own Node binary.
+ * The recipes above stay as the reference for routes and JSON bodies.
+ */
+function buildDeepSeekWindowsApiSection({ node, helper, channelName }) {
+  const run = `& ${psQuote(node)} ${psQuote(helper)}`;
+  return [
+    '## Calling the workspace API on this machine (Windows)',
+    'This sandbox cannot open HTTPS connections with `curl.exe` or `Invoke-WebRequest` '
+      + '(they fail with SEC_E_NO_CREDENTIALS), so do NOT use the `curl` commands above as '
+      + 'written. Use them only as the reference for routes and JSON bodies, and make every '
+      + 'workspace call with this PowerShell helper instead. It adds the auth header itself '
+      + 'and prints the JSON response.',
+    '',
+    `- GET:    \`${run} GET '/v1/files?network=...'\``,
+    `- POST/PUT/PATCH: write the JSON body to a file with your file tool, then \`${run} POST /v1/events --body-file body.json\``,
+    `- DELETE: \`${run} DELETE '/v1/files/FILE_ID?network=...'\``,
+    `- Upload a file to this thread: \`${run} upload report.md --channel ${psQuote(channelName)}\``,
+    `- Download a file: \`${run} download FILE_ID out.bin\``,
+    '',
+    'Never paste the workspace token into a command or a file: the helper reads it from the environment.',
+    '',
+  ].join('\n');
+}
+
 function buildDeepSeekTaskFile({
   agentName, workspaceId, channelName, endpoint, tokenExpr,
   mode = 'execute', disabledModules, browserEnabled = false,
-  recap = '', request = '', attachments = '',
+  recap = '', request = '', attachments = '', windowsApi = null,
 }) {
   // A token expression is a shell reference, never a credential. Anything that
   // does not start with `$` is almost certainly a real token passed by mistake.
   if (!tokenExpr || !/^\$/.test(String(tokenExpr))) {
     throw new Error(
       'buildDeepSeekTaskFile: tokenExpr must be a shell expression such as '
-      + '$OPENAGENTS_WORKSPACE_TOKEN — never the workspace token itself.',
+      + '$OPENAGENTS_WORKSPACE_AUTH — never the workspace token itself.',
     );
   }
 
@@ -1066,7 +1118,9 @@ function buildDeepSeekTaskFile({
     endpoint, workspaceId, token: tokenExpr, agentName, channelName, disabledModules, mode,
   });
 
-  const parts = [identity, directive, '\n', collab, '\n', modePrompt, '\n', api, '\n', buildGuardrails()];
+  const parts = [identity, directive, '\n', collab, '\n', modePrompt, '\n', api, '\n'];
+  if (windowsApi) parts.push(buildDeepSeekWindowsApiSection({ ...windowsApi, channelName }), '\n');
+  parts.push(buildGuardrails());
 
   if (recap) {
     parts.push(

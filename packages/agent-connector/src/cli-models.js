@@ -16,6 +16,7 @@
  */
 
 const os = require('os');
+const { stripVTControlCharacters } = require('node:util');
 // spawn() here is the WSL bridge from ./wsl: same signature as
 // child_process.spawn, and a straight pass-through unless the resolved CLI
 // lives on the other side of the Windows/WSL boundary.
@@ -107,11 +108,65 @@ function parseClaudeModels(text) {
 }
 
 /**
+ * `qodercli --list-models`: a "MODEL" header, then one model per line — the
+ * display name for Qoder's own tiers (which `-m` accepts as is) and
+ * "Name (key)" for a bring-your-own-key model, which `-m` takes by its key.
+ */
+function parseQoderModels(text) {
+  const seen = new Map();
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line === 'MODEL') continue;
+    const custom = line.match(/^(.*\S)\s+\(([^()]+)\)$/);
+    const id = cleanId(custom ? custom[2] : line);
+    if (!id || seen.has(id)) continue;
+    seen.set(id, { id, label: cleanLabel(custom ? custom[1] : line, id) });
+  }
+  return [...seen.values()].slice(0, MAX_MODELS);
+}
+
+/**
+ * Pi --list-models prints the configured providers' catalog as a table, not a
+ * per-model subscription entitlement check. Qualify ids so identical model
+ * names on different signed-in providers remain selectable without ambiguity.
+ */
+function parsePiModels(text, env = {}) {
+  const selectedProvider = String(env.PI_PROVIDER || '').trim().toLowerCase();
+  const seen = new Map();
+  let inTable = false;
+  for (const raw of stripVTControlCharacters(String(text || '')).split(/\r?\n/)) {
+    const fields = raw.trim().split(/\s+/);
+    if (fields.join(' ') === 'provider model context max-out thinking images') {
+      inTable = true;
+      continue;
+    }
+    if (!inTable || fields.length !== 6 ||
+        !/^\d+(?:\.\d+)?[KM]?$/i.test(fields[2]) ||
+        !/^\d+(?:\.\d+)?[KM]?$/i.test(fields[3]) ||
+        !/^(yes|no)$/.test(fields[4]) || !/^(yes|no)$/.test(fields[5])) continue;
+    const [provider, model] = fields;
+    if (!/^[\w.-]+$/.test(provider) || !cleanId(model)) continue;
+    if (selectedProvider && provider.toLowerCase() !== selectedProvider) continue;
+    const id = cleanId(`${provider}/${model}`);
+    if (!id || seen.has(id)) continue;
+    seen.set(id, { id, label: cleanLabel(`${model} (${provider})`, id) });
+    if (seen.size >= MAX_MODELS) break;
+  }
+  return [...seen.values()];
+}
+
+/**
  * How each CLI is asked. Claude Code has no command for it; its SDK control
  * protocol does, and a run that is sent the request and then end-of-input
  * answers and exits without a prompt ever reaching a model.
  */
 const LISTERS = {
+  pi: {
+    args: ['--no-approve', '--no-extensions', '--no-skills', '--list-models'],
+    parse: parsePiModels,
+    timeoutMs: 30_000,
+    env: { PI_SKIP_VERSION_CHECK: '1', NO_COLOR: '1' },
+  },
   codex: {
     args: ['debug', 'models'],
     parse: parseCodexModels,
@@ -123,11 +178,36 @@ const LISTERS = {
     parse: parseClaudeModels,
     timeoutMs: 45_000,
   },
+  // Qoder's personal access token signs in to the same account a browser
+  // sign-in would, so a token in the env is no reason not to ask (`withKey`).
+  // NO_RC keeps a first-ever start from editing the user's shell rc files.
+  qoder: {
+    args: ['--list-models'],
+    parse: parseQoderModels,
+    timeoutMs: 45_000,
+    withKey: true,
+    env: { QODER_NO_RC: '1' },
+  },
+  'qoder-cn': {
+    args: ['--list-models'],
+    parse: parseQoderModels,
+    timeoutMs: 45_000,
+    withKey: true,
+    env: { QODERCN_NO_RC: '1' },
+  },
 };
 
 /** Whether this agent type's CLI can be asked for its account's models. */
 function supportsCliModels(agentType) {
   return Object.prototype.hasOwnProperty.call(LISTERS, agentType);
+}
+
+/**
+ * Whether the CLI's list still applies with a key configured: true where the
+ * key is a token for the same account, not another endpoint's credential.
+ */
+function cliModelsWithKey(agentType) {
+  return supportsCliModels(agentType) && LISTERS[agentType].withKey === true;
 }
 
 /**
@@ -226,7 +306,7 @@ async function listCliModels(connector, type, opts = {}) {
     const resolved = connector.resolveAgentEnv(type, saved) || {};
     agentEnv = { ...saved, ...resolved };
   } catch {}
-  const env = stripForCliLogin(type, { ...getEnhancedEnv(), ...agentEnv }, connector.registry, opts.agentEnv);
+  const env = stripForCliLogin(type, { ...getEnhancedEnv(), ...agentEnv, ...(lister.env || {}) }, connector.registry, opts.agentEnv);
 
   const res = await runCli(binary, lister.args, {
     env,
@@ -236,9 +316,9 @@ async function listCliModels(connector, type, opts = {}) {
   });
   // A run killed for taking too long may still have answered: Claude Code
   // replies before it finishes starting up.
-  const models = lister.parse(res.stdout);
+  const models = lister.parse(res.stdout, agentEnv);
   if (models.length) return { type, ok: true, models };
   return fail(res.error || 'The CLI listed no models.');
 }
 
-module.exports = { listCliModels, supportsCliModels, parseCodexModels, parseClaudeModels };
+module.exports = { listCliModels, supportsCliModels, cliModelsWithKey, parseCodexModels, parseClaudeModels, parseQoderModels, parsePiModels };

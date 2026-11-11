@@ -11,7 +11,7 @@ import { YumiDmIntro } from './yumi-dm-intro';
 import { ChatInput, type PendingFile } from './chat-input';
 import { ReplyCitation, citationFor } from './reply-citation';
 import { ThreadStatusBar } from './thread-status-bar';
-import { EmptyConversation, EmptyState } from './empty-state';
+import { EmptyConversation } from './empty-state';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useMessagePolling } from '@/hooks/use-polling';
 import { useThreadBrowserMessages } from '@/hooks/use-thread-browser-messages';
@@ -27,6 +27,8 @@ import { ThreadParticipantCount } from './thread-participant-count';
 import { HumanProfile } from './human-profile';
 import { AddThreadParticipants } from './add-thread-participants';
 import { ResponseModeControl } from './response-mode-control';
+import { ForkTag } from './fork-thread';
+import { agentBusyInThread, arrangeQueuedMessages, PENDING_QUEUE_MS, type PendingQueueEntry } from './use-queued-messages';
 import { ThreadSettings } from './thread-settings';
 import { useLayout } from '@/components/layout/layout-context';
 import { DetailHeader } from '@/components/layout/app-header';
@@ -39,7 +41,7 @@ import { eventToMessage } from '@/lib/types';
 import type { RoutineItem, WorkspaceMessage } from '@/lib/types';
 import { useT } from '@/lib/i18n';
 import { acknowledgeMessage, pendingMessagesForDisplay } from '@/lib/optimistic-messages';
-import { pendingResponderName, expectsAgentResponse } from '@/lib/pending-responder';
+import { pendingResponderName, expectsAgentResponse, needsProactiveRouting } from '@/lib/pending-responder';
 import { useBrief } from './work-brief';
 import { subscribeComposerPrefill } from './composer-prefill';
 import { useMe } from '@/hooks/use-me';
@@ -171,7 +173,9 @@ async function refreshCachedSession(sessionId: string): Promise<void> {
 }
 
 export function ChatView() {
-  const { workspace, agents, currentUser, currentSessionId, setCurrentSessionId, sessions, updateLastMessage, setSessionActive, updateAgentMode, stopAllAgents, activeSessionIds, stoppingSessionIds, renameSession, setSessionOrchestration, consumeSkipFocus, createRoutine, routines, updateRoutine, knowledge } = useWorkspace();
+  const { workspace, agents, loading: workspaceLoading, workspaceLoadError, currentUser, currentSessionId, setCurrentSessionId, sessions, updateLastMessage, setSessionActive, updateAgentMode, stopAllAgents, activeSessionIds, stoppingSessionIds, renameSession, setSessionOrchestration, consumeSkipFocus, createRoutine, routines, updateRoutine, knowledge } = useWorkspace();
+  const hasConnectedAgent = agents.some((agent) => !agent.builtin && agent.status === 'online');
+  const needsConnection = !workspaceLoading && !workspaceLoadError && !hasConnectedAgent;
   const t = useT();
   const [showCreateRoutine, setShowCreateRoutine] = useState(false);
   // Snapshot on open: polling replaces routine objects, and the dialog resets
@@ -227,6 +231,7 @@ export function ChatView() {
   const {
     isMobile,
     openMobileList,
+    openView,
     viewMode,
     splitBrowser,
     setSplitBrowser,
@@ -287,13 +292,13 @@ export function ChatView() {
     initialMessagesSessionRef.current = currentSessionId;
   }
 
-  const { messages, loading, forceRefresh, generation, loadOlder, hasOlder, loadingOlder } = useMessagePolling({
+  const { messages, loading, forceRefresh, loadOlder, hasOlder, loadingOlder } = useMessagePolling({
     sessionId: currentSessionId,
     initialMessages: initialMessagesRef.current,
   });
   const { notifyFocus, notifyBlur, notifyTyping } = useComposingSignal(currentSessionId);
-  // Every step shows by default; the toggle is there to hide them.
-  const [showAllSteps, setShowAllSteps] = useState(true);
+  // Keep command history out of the conversation by default; opt in with the steps toggle.
+  const [showAllSteps, setShowAllSteps] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
@@ -330,7 +335,8 @@ export function ChatView() {
   // prepended — which never scrolls.
   // Starts at null so a remount takes the same one-render delay as a switch.
   const [optimisticSessionId, setOptimisticSessionId] = useState<string | null>(null);
-  // scrollKey triggers scroll-to-bottom: incremented on user send + backfill completion
+  // Only sending a message explicitly forces a scroll. History refreshes
+  // follow the message list's existing scroll intent.
   const [scrollKey, setScrollKey] = useState(0);
   const [focusKey, setFocusKey] = useState(0);
   const [replyTargets, setReplyTargets] = useState<Record<string, WorkspaceMessage | undefined>>({});
@@ -347,10 +353,6 @@ export function ChatView() {
     setFocusKey((k) => k + 1);
   }), []);
 
-  // Scroll to bottom when backfill replaces messages (generation changes)
-  useEffect(() => {
-    if (generation > 0) setScrollKey((k) => k + 1);
-  }, [generation]);
 
   const sessionMessages = useMemo(
     () => currentSessionId ? messagesForSession(currentSessionId, messages) : [],
@@ -479,6 +481,21 @@ export function ChatView() {
     [sessionMessages, sessionOptimisticMessages]
   );
   const browserMessages = useThreadBrowserMessages(displayMessages);
+  // Messages sent while an agent here is busy count as queued until its queue
+  // report arrives, so they never flash into the chat log first.
+  const [pendingQueue, setPendingQueue] = useState<(PendingQueueEntry & { sessionId: string })[]>([]);
+  const sessionPendingQueue = useMemo(
+    () => pendingQueue.filter((p) => p.sessionId === currentSessionId),
+    [pendingQueue, currentSessionId],
+  );
+  useEffect(() => {
+    if (!pendingQueue.length) return;
+    const next = Math.min(...pendingQueue.map((p) => p.sentAt + PENDING_QUEUE_MS));
+    const timer = setTimeout(() => setPendingQueue((prev) => prev.filter((p) => p.sentAt + PENDING_QUEUE_MS > Date.now())), Math.max(0, next - Date.now()) + 50);
+    return () => clearTimeout(timer);
+  }, [pendingQueue]);
+  // Queued messages wait in the Queue tab, not in the chat log.
+  const chatLogMessages = useMemo(() => arrangeQueuedMessages(displayMessages, sessionPendingQueue), [displayMessages, sessionPendingQueue]);
 
   const startEditingTitle = () => {
     setTitleDraft(currentSession?.title || '');
@@ -497,7 +514,7 @@ export function ChatView() {
   // Update last message cache for thread list preview
   useEffect(() => {
     if (!currentSessionId) return;
-    const lastMsg = displayMessages[displayMessages.length - 1];
+    const lastMsg = chatLogMessages[chatLogMessages.length - 1];
     if (lastMsg) {
       const isTerminalStatus = /stopped|stopping failed/i.test(lastMsg.content);
       const isWorking = !isTerminalStatus && (
@@ -505,11 +522,11 @@ export function ChatView() {
         lastMsg.messageType === 'thinking' ||
         lastMsg.messageType === 'loading'
       );
-      updateLastMessage(currentSessionId, lastMsg.senderName, lastMsg.content, isWorking);
+      updateLastMessage(currentSessionId, lastMsg.senderName, lastMsg.content, isWorking, lastMsg.senderType === 'agent');
     } else {
-      updateLastMessage(currentSessionId, '', '');
+      updateLastMessage(currentSessionId, '', '', false, false);
     }
-  }, [currentSessionId, displayMessages, updateLastMessage]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentSessionId, chatLogMessages, updateLastMessage]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Track whether the agent is actively working in this session
   const prevActiveSessionRef = useRef<string | null>(null);
@@ -559,6 +576,12 @@ export function ChatView() {
       // Create optimistic messages for instant feedback
       const timestamp = Date.now();
       const userContent = content || (files.length > 0 ? files.map((f) => f.file.name).join(', ') : '');
+      const routingPending = needsProactiveRouting({
+        content, mentions, mentionedHumans,
+        participants: currentSession?.participants || [], humanCount: currentSession?.humanCount,
+        responseMode: currentSession?.responseMode || 'proactive',
+        direct: !threadPrivacyApplies(currentSessionId) || currentSessionId.startsWith('routines:') || currentSessionId.startsWith('task:'),
+      });
       const userOptimisticMsg: WorkspaceMessage = {
         messageId: `optimistic-user-${timestamp}`,
         sessionId: currentSessionId,
@@ -570,7 +593,8 @@ export function ChatView() {
         mentions: [],
         targetAgents: null,
         createdAt: new Date().toISOString(),
-        metadata: replyingTo ? { reply_to: citationFor(replyingTo) } : {},
+        metadata: { ...(replyingTo ? { reply_to: citationFor(replyingTo) } : {}),
+          ...(routingPending && !files.length ? { _routingPending: true } : {}) },
       };
       const loadingOptimisticMsg: WorkspaceMessage = {
         messageId: `optimistic-loading-${timestamp}`,
@@ -599,10 +623,22 @@ export function ChatView() {
         content, mentions, mentionedHumans, dmCounterpart: isDM ? dmCounterpart : null,
         responseMode: threadPrivacyApplies(currentSessionId) && !currentSessionId.startsWith('routines:') ? currentSession?.responseMode || 'proactive' : undefined,
       });
+      // An agent here that is mid-task will queue anything routed to it. The
+      // routing result (below) confirms or clears this guess.
+      const busyHere = new Set(isDM ? [] : agents
+        .filter((a) => (currentSession?.participants || []).includes(a.agentName) && agentBusyInThread(a, currentSessionId, displayMessages))
+        .map((a) => a.agentName));
+      const mentionedAgents = mentions.map((m) => normalizeAgentAddress(m) || m);
+      const maybeQueued = busyHere.size > 0 && !!userContent.trim()
+        && (mentionedAgents.length ? mentionedAgents.some((name) => busyHere.has(name)) : mentionedHumans.length === 0);
+      const pendingId = `pending-${timestamp}`;
+      if (maybeQueued) {
+        setPendingQueue((prev) => [...prev, { id: pendingId, sessionId: currentSessionId, content: userContent, sentAt: timestamp }]);
+      }
       setOptimisticMessages((prev) => [
         ...prev.filter((m) => m.sessionId !== currentSessionId),
         userOptimisticMsg,
-        ...(expectResponse ? [loadingOptimisticMsg] : []),
+        ...(expectResponse && !maybeQueued ? [loadingOptimisticMsg] : []),
       ]);
       setScrollKey((k) => k + 1);
 
@@ -639,6 +675,11 @@ export function ChatView() {
           }));
         }
 
+        // Uploading is separate from classification. Start routing feedback
+        // only when the message is ready to reach the router.
+        if (routingPending && files.length) setOptimisticMessages(previous => previous.map(message =>
+          message.messageId === userOptimisticMsg.messageId
+            ? { ...message, metadata: { ...message.metadata, _routingPending: true } } : message));
         const sent = await workspaceApi.sendMessage(
           currentSessionId,
           content || (attachments ? attachments.map((a) => a.filename).join(', ') : ''),
@@ -649,9 +690,12 @@ export function ChatView() {
           mentionedHumans.length > 0 ? mentionedHumans : undefined,
           replyingTo?.messageId,
         );
+        // Still queued only if routing picked a busy agent; otherwise show it now.
+        const routedTo: string[] = Array.isArray(sent.metadata?.target_agents) ? sent.metadata.target_agents : [];
+        const queuedNow = maybeQueued && routedTo.some((name) => busyHere.has(name));
+        if (maybeQueued && !queuedNow) setPendingQueue((prev) => prev.filter((p) => p.id !== pendingId));
         // The server can also suppress replies (for example, the director rule).
-        if (sent.metadata?.router_unavailable) toast.warning(t('responseMode.routerUnavailable'));
-        setOptimisticMessages(prev => acknowledgeMessage(prev, userOptimisticMsg.messageId, loadingOptimisticMsg.messageId, sent, loadingOptimisticMsg));
+        setOptimisticMessages(prev => acknowledgeMessage(prev, userOptimisticMsg.messageId, loadingOptimisticMsg.messageId, sent, queuedNow ? undefined : loadingOptimisticMsg));
         capture('message_sent', {
           has_attachments: (attachments?.length ?? 0) > 0,
           has_mentions: mentions.length > 0,
@@ -660,6 +704,7 @@ export function ChatView() {
         forceRefresh();
       } catch (err) {
         if (replyingTo) setReplyTargets(previous => ({ ...previous, [currentSessionId]: previous[currentSessionId] || replyingTo }));
+        setPendingQueue((prev) => prev.filter((p) => p.id !== `pending-${timestamp}`));
         // Remove optimistic messages on error
         setOptimisticMessages((prev) =>
           prev.filter(
@@ -688,7 +733,7 @@ export function ChatView() {
         }
       }
     },
-    [replyTarget, currentSessionId, currentUser.id, currentUser.name, forceRefresh, agents, isDM, dmCounterpart, myAddr, setCurrentSessionId, currentSession?.participants, currentSession?.master, currentSession?.responseMode]
+    [replyTarget, currentSessionId, currentUser.id, currentUser.name, forceRefresh, agents, displayMessages, isDM, dmCounterpart, myAddr, setCurrentSessionId, currentSession?.participants, currentSession?.master, currentSession?.responseMode, currentSession?.humanCount]
   );
 
   const hasCollapsibleSteps = hasCollapsedSteps(displayMessages);
@@ -776,6 +821,7 @@ export function ChatView() {
               {currentSession?.title || t('header.untitledThread')}
             </h2>
           )}
+          {!isDM && !editingTitle && currentSession?.forkedFrom && <ForkTag forkedFrom={currentSession.forkedFrom} />}
           {!isDM && threadPrivacyApplies(currentSessionId) && currentSession && (
             <span className="inline-flex shrink-0 text-muted-foreground" title={t(currentSession.visibility === 'private' ? 'threadAccess.private' : 'threadAccess.public')} aria-label={t(currentSession.visibility === 'private' ? 'threadAccess.private' : 'threadAccess.public')}>
               {currentSession.visibility === 'private' ? <Lock className="size-3.5" /> : <Globe className="size-3.5" />}
@@ -830,23 +876,23 @@ export function ChatView() {
             </button>
           )}
 
-          {/* All steps toggle — its label says what a click does; an icon
-              alone went unnoticed */}
-          {hasCollapsibleSteps && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowAllSteps((prev) => !prev)}
-              className="gap-1.5 h-7 text-xs font-medium"
-              aria-pressed={showAllSteps}
-            >
-              <ListTree className="size-3.5" />
-              {showAllSteps ? t('chat.showLatestSteps') : t('chat.showAllSteps')}
-            </Button>
-          )}
-
           {!isDM && currentSessionId && threadPrivacyApplies(currentSessionId) && currentSession && (
             <AddThreadParticipants key={`add-participants:${currentSessionId}`} channelName={currentSessionId} />
+          )}
+
+          {/* All steps toggle */}
+          {hasCollapsibleSteps && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowAllSteps((prev) => !prev)}
+              className="size-7 shrink-0"
+              aria-pressed={showAllSteps}
+              aria-label={showAllSteps ? t('chat.showLatestSteps') : t('chat.showAllSteps')}
+              title={showAllSteps ? t('chat.showLatestSteps') : t('chat.showAllSteps')}
+            >
+              <ListTree aria-hidden="true" className="size-3.5" />
+            </Button>
           )}
 
           {!isDM && currentSessionId && threadPrivacyApplies(currentSessionId) && !currentSessionId.startsWith('routines:') && currentSession && (
@@ -907,7 +953,7 @@ export function ChatView() {
             </Button>
           )}
       </DetailHeader>
-      <ThreadResources key={currentSessionId} messages={browserMessages} />
+      <ThreadResources key={currentSessionId} messages={browserMessages} queueMessages={displayMessages} pendingQueue={sessionPendingQueue} />
 
       {/* Offline-agent warning — surfaces when any participant is offline so the
           user knows a reply may not come. When ALL are offline it's a stronger
@@ -915,7 +961,7 @@ export function ChatView() {
           the thread for it. Shown for single-agent threads too, not just groups. */}
       {(() => {
         const participants = currentSession?.participants || [];
-        if (participants.length === 0) return null;
+        if (participants.length === 0 || needsConnection) return null;
         const byName = new Map(agents.map((a) => [a.agentName, a]));
         const offline = participants.filter((p) => byName.get(p)?.status === 'offline');
         if (offline.length === 0) return null;
@@ -998,6 +1044,12 @@ export function ChatView() {
         );
       })()}
 
+      {needsConnection && !dmWithPerson && (
+        <div role="status" className="flex shrink-0 items-center justify-between gap-3 border-b bg-brand/5 px-4 py-2 text-xs text-muted-foreground">
+          <span>{t('chat.connectAgentNotice')}</span>
+          <button type="button" onClick={() => openView('connect')} className="shrink-0 rounded text-brand font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{t('nav.connectAgent')}</button>
+        </div>
+      )}
       {/* Messages */}
       <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
         <ThreadLiveBrowser key={`live-browser:${currentSessionId}`} messages={browserMessages} />
@@ -1022,12 +1074,12 @@ export function ChatView() {
             return dmBuiltin ? (
               <YumiDmIntro agentLabel={agentLabel(dmBuiltin)} onQuick={(text) => handleSend(text)} />
             ) : (
-              isDM ? <EmptyConversation name={dmTitle || undefined} human={dmWithPerson} self={dmCounterpart === myAddr} /> : <EmptyState />
+              isDM ? <EmptyConversation name={dmTitle || undefined} human={dmWithPerson} self={dmCounterpart === myAddr} /> : <EmptyConversation human={!hasConnectedAgent} />
             );
           })()
         ) : (
           <ChatMessages
-            messages={displayMessages}
+            messages={chatLogMessages}
             agents={agents}
             showAllSteps={showAllSteps}
             scrollKey={scrollKey}
@@ -1063,7 +1115,7 @@ export function ChatView() {
             cramped on a 27" 4K, where the pane itself is 2000px+ wide. */}
         {(!isDM || dmWritable) && (
           <div className="mx-auto w-full max-w-3xl px-3 lg:px-5 pt-1 pb-2 xl:max-w-4xl 2xl:max-w-6xl lg:pb-3">
-            {currentSessionId && <ThreadStatusBar channelName={currentSessionId} messages={displayMessages} />}
+            {currentSessionId && <ThreadStatusBar channelName={currentSessionId} />}
             {replyTarget && <ReplyCitation citation={citationFor(replyTarget)} onCancel={() => setReplyTargets(previous => ({ ...previous, [currentSessionId]: undefined }))} />}
             <ChatInput conversationId={currentSessionId}
               onSend={handleSend}

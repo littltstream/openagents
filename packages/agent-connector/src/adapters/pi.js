@@ -64,6 +64,8 @@ const {
   MIN_PI_VERSION,
 } = require('./pi-stream');
 
+const { launcherProviderId } = require('./pi-provider-config');
+
 const IS_WINDOWS = process.platform === 'win32';
 const LAUNCHER_PROVIDER_EXTENSION = path.join(__dirname, 'pi-launcher-provider.mjs');
 
@@ -127,6 +129,56 @@ class PiCancelledError extends Error {
     super(message);
     this.name = 'PiCancelledError';
   }
+}
+
+/**
+ * Inline `--append-system-prompt` text longer than this is written to a
+ * session file. A single argv entry past ~980 characters is SIGKILL'd on some
+ * macOS hosts, and the workspace prompt carries the workspace token.
+ */
+const APPEND_PROMPT_INLINE_MAX = 512;
+
+/**
+ * Return `prompt` unchanged when it is short enough to stay on argv, otherwise
+ * write it into `sessionDir` and return that path.
+ *
+ * The filename is `system-prompt-<sessionId>.md` when `sessionId` is a UUID,
+ * and `system-prompt-default.md` otherwise, so a non-UUID id cannot leave
+ * `sessionDir`. The write is atomic (temp sibling, mode 0600, rename) and the
+ * file stays while the process runs (Pi re-reads it mid-session) and is
+ * removed when that process exits or the session is cleared. A write, chmod,
+ * or rename failure throws; the long text is never put back on argv.
+ *
+ * @param {string} prompt
+ * @param {string} sessionDir OpenAgents session directory, never the working dir
+ * @param {string} [sessionId]
+ * @returns {string}
+ */
+/** Where stagePiAppendSystemPrompt writes the prompt for this session. */
+function stagedPromptPath(sessionDir, sessionId) {
+  const id = isValidSessionId(sessionId) ? sessionId : 'default';
+  return path.join(sessionDir, `system-prompt-${id}.md`);
+}
+
+function stagePiAppendSystemPrompt(prompt, sessionDir, sessionId) {
+  if (typeof prompt !== 'string' || prompt.length <= APPEND_PROMPT_INLINE_MAX
+    || typeof sessionDir !== 'string' || !sessionDir) {
+    return prompt;
+  }
+  const dest = stagedPromptPath(sessionDir, sessionId);
+  const tmp = `${dest}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(tmp, prompt, { encoding: 'utf-8', mode: 0o600 });
+    fs.chmodSync(tmp, 0o600);
+    fs.renameSync(tmp, dest);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* temp file may not exist */ }
+    let detail = (err && err.message) ? String(err.message) : 'unknown error';
+    if (detail.includes(prompt)) detail = (err && err.code) ? String(err.code) : 'write failed';
+    throw new Error(`Failed to stage the Pi system prompt in ${sessionDir}: ${detail}`);
+  }
+  return dest;
 }
 
 class PiAdapter extends BaseAdapter {
@@ -239,10 +291,34 @@ class PiAdapter extends BaseAdapter {
   }
 
   _clearSession(channel) {
-    if (this._channelSessions[channel]) {
+    const sessionId = this._channelSessions[channel];
+    if (sessionId) {
       delete this._channelSessions[channel];
       this._saveSessions();
+      // The staged prompt holds the workspace token; a cleared session never
+      // reads it again. Left alone while a process for this channel runs.
+      if (!this._persistentProcs[channel]) {
+        this._unlinkStagedPrompt(stagedPromptPath(this._sessionDir, sessionId));
+      }
     }
+  }
+
+  _unlinkStagedPrompt(file) {
+    if (!file) return;
+    try { fs.unlinkSync(file); } catch { /* already gone */ }
+  }
+
+  /**
+   * Remove the prompt file a process was started with, once it exits. Skipped
+   * when a newer process already owns the channel: a respawn rewrites the
+   * same per-session path, and Pi re-reads it during the session.
+   */
+  _releaseStagedPrompt(channel, pp) {
+    if (!pp || !pp.stagedPrompt) return;
+    const current = this._persistentProcs[channel];
+    if (current && current !== pp) return;
+    this._unlinkStagedPrompt(pp.stagedPrompt);
+    pp.stagedPrompt = null;
   }
 
   // ------------------------------------------------------------------
@@ -265,9 +341,8 @@ class PiAdapter extends BaseAdapter {
 
   /**
    * Resolve a shim/symlink to [nodeBin, jsEntry] so we spawn the JS entry point
-   * under a Node we control. On Windows this also avoids wrapping a `.cmd` in
-   * `cmd.exe /c`, whose 8191-char command-line cap would truncate the long
-   * --append-system-prompt. Returns null when the target is a native binary.
+   * under a Node we control. On Windows this also keeps a `.cmd` launch off
+   * `cmd.exe /c`. Returns null when the target is a native binary.
    */
   _resolveToNodeCmd(binPath) {
     const nodeBin = this._findNodeBin();
@@ -276,8 +351,9 @@ class PiAdapter extends BaseAdapter {
         const cmdDir = path.dirname(path.resolve(binPath));
         // Both npm shim dialects (`%dp0%` and `%~dp0`) are parsed — see
         // parseWindowsCmdShim. A shim we fail to parse falls back to
-        // `cmd.exe /c`, where the ~14 KB --append-system-prompt exceeds
-        // cmd.exe's 8191-character command line and the agent hangs.
+        // `cmd.exe /c`. Parsing still keeps the `.cmd` launch off cmd.exe.
+        // A prompt over 512 characters is a 0600 file under the session dir,
+        // and that path is what `--append-system-prompt` receives.
         const shim = parseWindowsCmdShim(fs.readFileSync(binPath, 'utf-8'), cmdDir);
         if (shim && shim.kind === 'script') return [nodeBin, shim.target];
         if (shim && shim.kind === 'exe') return [shim.target];
@@ -856,6 +932,7 @@ class PiAdapter extends BaseAdapter {
       }
       pp.exitCode = code;
       this._teardownProcState(pp, why);
+      this._releaseStagedPrompt(channel, pp);
       this._unregisterProc(channel, pp, proc);
     });
 
@@ -1302,11 +1379,17 @@ class PiAdapter extends BaseAdapter {
     const sessionId = this._sessionIdFor(channel, workingDir);
     try { fs.mkdirSync(this._sessionDir, { recursive: true }); } catch {}
 
+    // A long prompt is a 0600 file in the session dir. The flag receives that
+    // path; short text stays inline. There is no argv fallback on failure.
+    const appendSystemPrompt = stagePiAppendSystemPrompt(systemPrompt, this._sessionDir, sessionId);
     const args = buildPiArgs({
       sessionDir: this._sessionDir,
       sessionId,
-      appendSystemPrompt: systemPrompt,
-      provider: cfg.provider,
+      appendSystemPrompt,
+      // A stored Pi login wins over an extension's apiKey for the same
+      // provider. Keep Launcher-key requests in a separate provider namespace
+      // so a native login cannot authenticate a different endpoint.
+      provider: launcherProviderId({ ...cfg, apiKey: launcherKey }),
       model: cfg.model,
       thinking: cfg.thinking,
       sessionName: `${this.agentName}/${channel}`,
@@ -1325,7 +1408,11 @@ class PiAdapter extends BaseAdapter {
       env: this._buildEnv(),
       sessionId,
     });
-    if (pp.spawnError) throw new Error(pp.spawnError);
+    pp.stagedPrompt = appendSystemPrompt !== systemPrompt ? appendSystemPrompt : null;
+    if (pp.spawnError) {
+      this._releaseStagedPrompt(channel, pp);
+      throw new Error(pp.spawnError);
+    }
     return pp;
   }
 
@@ -1508,3 +1595,4 @@ class PiAdapter extends BaseAdapter {
 
 module.exports = PiAdapter;
 module.exports.PiCancelledError = PiCancelledError;
+module.exports.stagePiAppendSystemPrompt = stagePiAppendSystemPrompt;

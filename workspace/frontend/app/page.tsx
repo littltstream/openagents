@@ -26,6 +26,8 @@ import { capture, group } from '@/lib/analytics';
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard';
 import { useCreateWorkspace } from '@/hooks/use-create-workspace';
 import { useFormatters, useT, type MessageKey } from '@/lib/i18n';
+import { DesktopWorkspaceHome } from '@/components/workspaces-home/desktop-workspace-home';
+import { autoEnterTarget, markAutoEntered, rememberWorkspaceTokens } from '@/lib/first-workspace';
 
 /** A catalogue key, translated at render time, or a raw message from an Error. */
 type ErrorMessage = { key: MessageKey } | { text: string };
@@ -416,13 +418,13 @@ function CreateWorkspaceStatus({ flow, onCheckList }: {
   onCheckList: () => void;
 }) {
   const t = useT();
-  const link = 'font-bold underline underline-offset-2 hover:text-black';
+  const link = 'font-bold underline underline-offset-2 hover:text-foreground';
   if (flow.phase === 'slow') {
-    return <p role="status" className="text-sm text-neutral-600">{t('dashboard.createSlow')}</p>;
+    return <p role="status" className="text-sm text-muted-foreground">{t('dashboard.createSlow')}</p>;
   }
   if (flow.phase === 'unconfirmed') {
     return (
-      <p role="status" className="text-sm text-neutral-600">
+      <p role="status" className="text-sm text-muted-foreground">
         {t('dashboard.createUnconfirmed')}{' '}
         <button type="button" onClick={onCheckList} className={link}>{t('dashboard.createCheckList')}</button>
       </p>
@@ -430,7 +432,7 @@ function CreateWorkspaceStatus({ flow, onCheckList }: {
   }
   if (flow.phase === 'opening') {
     return (
-      <p role="status" className="text-sm text-neutral-600">
+      <p role="status" className="text-sm text-muted-foreground">
         {t('dashboard.createOpening')}{' '}
         <button type="button" onClick={flow.reopen} className={link}>{t('dashboard.createOpen')}</button>
       </p>
@@ -775,6 +777,7 @@ function MembershipHome({
         // stays up with no error and no retry.
         const list = await listAccountWorkspaces(idToken, AbortSignal.timeout(LIST_TIMEOUT_MS));
         if (seq !== loadSeqRef.current) return;
+        rememberWorkspaceTokens(list, idToken);
         setWorkspaces(list);
         // Funnel checkpoint: the signed-in user reached their workspace list
         // (which includes the auto-provisioned first workspace). Once per
@@ -837,13 +840,8 @@ function MembershipHome({
   // Self-hosted OIDC accounts always see the picker, even with one workspace.
   // Single-workspace users on the hosted app go STRAIGHT IN — no picker, no "this is your first
   // workspace" card. A list with one option is pure friction (especially on a
-  // phone). Once per browser session, so deliberately navigating back to the
-  // home page still shows the list (rename/delete/create live here).
-  const willAutoEnter =
-    !usesOidcLogin() &&
-    !!firstWorkspace &&
-    typeof window !== 'undefined' &&
-    scopedSessionStorage.getItem('oa_auto_entered_first_ws') !== '1';
+  // phone). See lib/first-workspace for the once-per-session rule.
+  const willAutoEnter = !usesOidcLogin() && !loading && autoEnterTarget(workspaces) !== null;
   const autoEnteredRef = useRef(false);
   // Re-renders once the redirect is out, so willAutoEnter (now false) stops
   // holding the skeleton. In the desktop app the push opens the workspace in
@@ -853,7 +851,7 @@ function MembershipHome({
   useEffect(() => {
     if (!willAutoEnter || !firstWorkspace || autoEnteredRef.current) return;
     autoEnteredRef.current = true;
-    scopedSessionStorage.setItem('oa_auto_entered_first_ws', '1');
+    markAutoEntered();
     capture('first_workspace_auto_entered', { workspace_id: firstWorkspace.slug });
     router.push(`/${firstWorkspace.slug}`);
     if (desktopHost()) {
@@ -894,34 +892,55 @@ function MembershipHome({
   signOutRef.current = handleSignOut;
   useEffect(() => desktopHost()?.onSignOutRequest?.(() => void signOutRef.current()), []);
 
-  // Inside the desktop app the launcher's title bar already carries the brand
-  // and the account, so a second header here would only repeat them.
+  // Inside the desktop app the launcher's Workspace bar carries the account on
+  // this page, and the page wears the app's own look rather than the site's.
   const inDesktop = !!desktopHost();
+  if (inDesktop) {
+    return (
+      <DesktopWorkspaceHome
+        workspaces={workspaces}
+        loading={loading || willAutoEnter}
+        error={error ? ('key' in error ? t(error.key) : error.text) : null}
+        onRetry={load}
+        onOpen={(ws) => router.push(`/${ws.slug}`)}
+        create={{
+          open: showCreate,
+          name: newName,
+          pending: createFlow.pending,
+          locked: createLocked,
+          status: <CreateWorkspaceStatus flow={createFlow} onCheckList={load} />,
+          onOpen: openCreate,
+          onClose: () => setShowCreate(false),
+          onName: setNewName,
+          onSubmit: handleCreate,
+        }}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen text-neutral-900" style={{ background: PAGE_BG }}>
-      {!inDesktop && (
-        <header className="sticky top-0 z-10 border-b-2 border-black bg-white/85 backdrop-blur-sm">
-          <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
-            <a
-              href="https://openagents.org"
-              className="flex items-center gap-2.5 rounded-md transition-transform hover:-translate-y-0.5 focus:outline-none"
-              title={t('dashboard.backToHome')}
-            >
-              <Image src={appPath('/logo-icon.png')} alt="OpenAgents" width={26} height={26} />
-              <span className="text-lg font-extrabold tracking-tight">OpenAgents</span>
-            </a>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                <div
-                  className="size-7 rounded-full border-2 border-black flex items-center justify-center text-white text-xs font-bold"
-                  style={{ background: `linear-gradient(135deg, ${BRAND.blue}, ${BRAND.teal})` }}
-                >
-                  {(userEmail[0] || '?').toUpperCase()}
-                </div>
-                <span className="text-sm text-neutral-600 hidden sm:inline">{userEmail}</span>
+      <header className="sticky top-0 z-10 border-b-2 border-black bg-white/85 backdrop-blur-sm">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
+          <a
+            href="https://openagents.org"
+            className="flex items-center gap-2.5 rounded-md transition-transform hover:-translate-y-0.5 focus:outline-none"
+            title={t('dashboard.backToHome')}
+          >
+            <Image src={appPath('/logo-icon.png')} alt="OpenAgents" width={26} height={26} />
+            <span className="text-lg font-extrabold tracking-tight">OpenAgents</span>
+          </a>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <div
+                className="size-7 rounded-full border-2 border-black flex items-center justify-center text-white text-xs font-bold"
+                style={{ background: `linear-gradient(135deg, ${BRAND.blue}, ${BRAND.teal})` }}
+              >
+                {(userEmail[0] || '?').toUpperCase()}
               </div>
-              {usesOidcLogin() && <button
+              <span className="text-sm text-neutral-600 hidden sm:inline">{userEmail}</span>
+            </div>
+            {usesOidcLogin() && <button
                 disabled={sendingPasswordEmail}
                 onClick={() => {
                   setSendingPasswordEmail(true);
@@ -935,17 +954,16 @@ function MembershipHome({
               >
                 <KeyRound className="size-4" />
               </button>}
-              <button
-                onClick={handleSignOut}
-                title={t('userMenu.signOut')}
-                className="inline-flex size-8 items-center justify-center rounded-md border-2 border-black bg-white text-neutral-700 transition-all hover:bg-neutral-100 hover:shadow-[2px_2px_0_0_#000]"
-              >
-                <LogOut className="size-4" />
-              </button>
-            </div>
+            <button
+              onClick={handleSignOut}
+              title={t('userMenu.signOut')}
+              className="inline-flex size-8 items-center justify-center rounded-md border-2 border-black bg-white text-neutral-700 transition-all hover:bg-neutral-100 hover:shadow-[2px_2px_0_0_#000]"
+            >
+              <LogOut className="size-4" />
+            </button>
           </div>
-        </header>
-      )}
+        </div>
+      </header>
 
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-10 sm:py-14">
         {/* Hero */}

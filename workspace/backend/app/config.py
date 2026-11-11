@@ -139,6 +139,10 @@ class Config:
     ROUTER_LLM_MODEL: str = os.environ.get("ROUTER_LLM_MODEL", "")  # auto-detected from provider if empty
     ROUTER_LLM_API_KEY: str = os.environ.get("ROUTER_LLM_API_KEY", "")  # universal key (checked first)
     ROUTER_LLM_BASE_URL: str = os.environ.get("ROUTER_LLM_BASE_URL", "")  # custom endpoint for openai provider
+    # Human-message classification and completion handoffs; other LLM tasks keep ROUTER_LLM_*.
+    MESSAGE_ROUTER_MODEL: str = os.environ.get("MESSAGE_ROUTER_MODEL", "")
+    MESSAGE_ROUTER_BASE_URL: str = os.environ.get("MESSAGE_ROUTER_BASE_URL", "")
+    MESSAGE_ROUTER_API_KEY: str = os.environ.get("MESSAGE_ROUTER_API_KEY", "")
     ANTHROPIC_API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "")  # fallback for anthropic provider
 
     # Cloud agents
@@ -169,6 +173,11 @@ class Config:
     # Output cap per LLM turn. The prompt asks for short replies; this bounds
     # the answer turn (which dominates latency) for verbose models.
     YUMI_MAX_TOKENS: int = int(os.environ.get("YUMI_MAX_TOKENS", "800"))
+
+    # Acenta hosted agents ("Cloud" tab). Disabled unless both are set; the
+    # secret authenticates this server to Acenta's integration API.
+    ACENTA_API_URL: str = os.environ.get("ACENTA_API_URL", "")
+    ACENTA_INTEGRATION_SECRET: str = os.environ.get("ACENTA_INTEGRATION_SECRET", "")
 
     # Google OAuth (for "Sign in with Google" Gemini integration)
     GOOGLE_OAUTH_CLIENT_ID: str = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
@@ -263,6 +272,11 @@ class Config:
     PILOT_WINDOW_DAYS: int = int(os.environ.get("PILOT_WINDOW_DAYS", "30"))
     # Blast-radius cap for the grant endpoint (per process, sliding hour).
     PILOT_MAX_GRANTS_PER_HOUR: int = int(os.environ.get("PILOT_MAX_GRANTS_PER_HOUR", "30"))
+
+    # "Connect a computer" reminder emails 24h/72h after a workspace is created
+    # without a device (app/services/onboarding_reminders.py). Off by default:
+    # owners found them noisy (2026-11-09). Set to true to send them again.
+    ONBOARDING_REMINDERS_ENABLED: bool = os.environ.get("ONBOARDING_REMINDERS_ENABLED", "false").lower() in ("true", "1", "yes")
 
     # In-app feedback forwarding. Feedback rows always land in the DB; when
     # this is set they are also emailed (via Resend) to the team.

@@ -4,30 +4,40 @@
 // no-stray-console-window default on Windows. See win-console.js.
 require('./win-console').installWindowsHideDefault();
 
+const path = require('path');
 const { AgentConnector, Daemon } = require('./index');
 const { hasCredentialMetadata, formatAuthGuidance } = require('./auth-guidance');
 const { AUTH_MODE_KEY, CLI_LOGIN, isCliLogin } = require('./env');
+const { loginCommandOf } = require('./agent-login');
 
 // ---------------------------------------------------------------------------
 // Arg parsing
 // ---------------------------------------------------------------------------
 
+// Flags that may be given more than once (`agn env x --set A=1 --set B=2`).
+// They always parse to an array; every other flag keeps its last value.
+const REPEATABLE_FLAGS = new Set(['set']);
+
 function parseArgs(argv) {
   const args = argv.slice(2);
   const flags = {};
   const allPositional = [];
+  const setFlag = (name, value) => {
+    if (REPEATABLE_FLAGS.has(name)) (flags[name] = flags[name] || []).push(value);
+    else flags[name] = value;
+  };
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith('--')) {
       const eq = a.indexOf('=');
       if (eq > 0) {
-        flags[a.slice(2, eq)] = a.slice(eq + 1);
+        setFlag(a.slice(2, eq), a.slice(eq + 1));
       } else if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
-        flags[a.slice(2)] = args[i + 1];
+        setFlag(a.slice(2), args[i + 1]);
         i++;
       } else {
-        flags[a.slice(2)] = true;
+        setFlag(a.slice(2), true);
       }
     } else {
       allPositional.push(a);
@@ -177,7 +187,7 @@ async function cmdStatus(connector) {
 
 async function cmdCreate(connector, flags, positional) {
   const name = positional[0];
-  if (!name) { print('Usage: agn create <name> [--type <type>] [--install]'); return; }
+  if (!name) { print('Usage: agn create <name> [--type <type>] [--description <summary>] [--install]'); return; }
   const type = flags.type || 'openclaw';
   const role = flags.role || 'worker';
 
@@ -194,7 +204,9 @@ async function cmdCreate(connector, flags, positional) {
   }
 
   try {
-    connector.addAgent({ name, type, role, path: flags.path || process.cwd() });
+    // Stored absolute: a relative --path is relative to this shell, and the
+    // daemon that later runs the agent has a different cwd.
+    connector.addAgent({ name, type, role, path: flags.path ? path.resolve(String(flags.path)) : process.cwd(), description: flags.description });
 
     // Signal daemon to pick up the new agent
     try { connector.sendDaemonCommand('reload'); } catch {}
@@ -378,6 +390,25 @@ async function cmdRuntimes(connector, flags) {
       // which judges the type again with its agents' env, said Ready. Judge it
       // the way the daemon launches it: a type is ready when one of its agents
       // is.
+      //
+      // That key is that agent's alone: a new agent of the type does not get
+      // it. `typeReady` keeps the type's own answer (<type>.env, this
+      // process's environment, the CLI's sign-in) for the add form, which
+      // otherwise read Ready and added an agent with no key at all.
+      const typeReady = !!h.ready;
+      // Whether the CLI itself is signed in on this device, keys aside: what an
+      // agent added on "the account signed in on the device" runs on, the add
+      // form's only choice besides a key. Null for a type with no sign-in. A
+      // type ready on a key never said whether it is signed in as well, so
+      // only that case is asked again, with keys not counting.
+      let signedIn = null;
+      if (loginCommandOf(e)) {
+        if (!h.installed || !h.ready) signedIn = false;
+        else if (h.auth_mode === 'cli_login') signedIn = true;
+        else {
+          try { signedIn = !!connector.healthCheck(e.name, { cliLogin: true }).ready; } catch { signedIn = false; }
+        }
+      }
       let agentEnv = null;
       if (h.installed && !h.ready) {
         for (const a of agents) {
@@ -409,6 +440,8 @@ async function cmdRuntimes(connector, flags) {
         type: e.name,
         installed: !!h.installed,
         ready: !!h.ready,
+        typeReady,
+        signedIn,
         version: h.version || null,
         reason: h.reason || null,
         message: h.message || null,
@@ -586,19 +619,7 @@ function connectKnownWorkspace(connector, name, ref, connectionId) {
   }
 }
 
-/**
- * Browser URL of a workspace, matching the TUI's convention: a localhost/dev
- * endpoint serves its own web app; everything else lives on the hosted
- * dashboard. This is what a freshly paired user actually needs next — NOT
- * another CLI command.
- */
-function workspaceWebUrl(slug, endpoint) {
-  const ep = String(endpoint || '');
-  const isLocal = ep.includes('localhost') || ep.includes('127.0.0.1');
-  return isLocal
-    ? `${ep.replace(/\/+$/, '')}/${slug}`
-    : `https://workspace.openagents.org/${slug}`;
-}
+const { workspaceWebUrl, pairDevice } = require('./join');
 
 /**
  * `agn device <connect|status>` — pair this device (formerly "node") to a
@@ -644,40 +665,7 @@ async function cmdNode(connector, flags, positional) {
 
     print('Connecting this device to your workspace...');
     try {
-      const res = await connector.redeemNodePairingCode(code, info);
-      // A code always redeems against ONE workspace; if that workspace is one
-      // this device already belongs to, this is a re-pair, not a new pairing.
-      // recordPairing below still runs — it refreshes the (possibly rotated)
-      // credential in place — but the user should hear "already paired", not
-      // a duplicate "connected".
-      const alreadyPaired = priorPairings.some(
-        (p) => p.node_id === res.nodeId,
-      );
-      // recordPairing, not saveNode: this device can be a node in several
-      // workspaces at once, and a bare save would drop the others' pairings.
-      // Freeze legacy bindings before another owner adds a connection here.
-      const prior = priorPairings.filter((p) => p.workspace_id === res.workspaceId);
-      if (prior.length === 1) for (const agent of connector.config.getAgents()) {
-        if (!agent.node_id && (agent.network === prior[0].workspace_slug || agent.network === prior[0].workspace_id))
-          connector.config.updateAgent(agent.name, { node_id: prior[0].node_id });
-      }
-      nodeCfg.recordPairing(info.nodeKey, {
-        node_id: res.nodeId,
-        owner_email: res.ownerEmail,
-        workspace_id: res.workspaceId,
-        workspace_slug: res.workspaceSlug,
-        workspace_name: res.workspaceName,
-        endpoint: connector.workspace.endpoint,
-        token: res.token,
-      });
-      // Register the workspace locally so agents created on this node can use it.
-      connector.config.addNetwork({
-        id: res.workspaceId,
-        slug: res.workspaceSlug,
-        name: res.workspaceName,
-        endpoint: connector.workspace.endpoint,
-        token: res.token,
-      });
+      const { res, alreadyPaired } = await pairDevice(connector, code, info, priorPairings);
       if (alreadyPaired) {
         print(`Already paired with '${res.workspaceName}' (${res.workspaceSlug}) — refreshed this device's credential.`);
       } else {
@@ -727,6 +715,20 @@ async function cmdNode(connector, flags, positional) {
 
   print('Usage: agn device <connect|status> [pairing-code]   (alias: agn node)');
   process.exitCode = 1;
+}
+
+/**
+ * `agn join <pairing-code>` — run from inside an agent (Claude Code, Codex,
+ * ...): connect that agent to the workspace. See join.js.
+ */
+async function cmdJoin(connector, flags, positional) {
+  const { join } = require('./join');
+  process.exitCode = await join({
+    code: positional[0] || flags.code,
+    flags: { ...flags, autostart: flags['no-autostart'] ? false : flags.autostart },
+    connector,
+    print,
+  });
 }
 
 async function cmdDisconnect(connector, _flags, positional) {
@@ -820,15 +822,19 @@ async function cmdEnv(connector, flags, positional) {
   const type = positional[0];
   if (!type) { print('Usage: agn env <type> [--set KEY=VALUE]'); return; }
 
-  const setVal = flags.set;
-  if (setVal) {
-    const eq = setVal.indexOf('=');
-    if (eq < 1) { print('Usage: --set KEY=VALUE'); return; }
-    const key = setVal.slice(0, eq);
-    const val = setVal.slice(eq + 1);
-    connector.saveAgentEnv(type, { [key]: val });
+  const setVals = flags.set || [];
+  if (setVals.length) {
+    // Validate every pair before saving any, so a typo in the last one does
+    // not leave the first ones half-applied.
+    const updates = {};
+    for (const setVal of setVals) {
+      const eq = typeof setVal === 'string' ? setVal.indexOf('=') : -1;
+      if (eq < 1) { print('Usage: --set KEY=VALUE'); return; }
+      updates[setVal.slice(0, eq)] = setVal.slice(eq + 1);
+    }
+    connector.saveAgentEnv(type, updates);
     try { connector.sendDaemonCommand('reload'); } catch {}
-    print(`Saved ${key} for ${type}`);
+    print(`Saved ${Object.keys(updates).join(', ')} for ${type}`);
     return;
   }
 
@@ -1047,6 +1053,11 @@ async function cmdProbe(connector, flags, positional) {
   } catch {}
 
   const result = await connector.probeAgentType(type, { agentEnv });
+  // The daemon probes by agent name: a name that is neither an agent here nor
+  // a type is an agent that is gone, not a type the catalog lacks.
+  if (!agentEnv && result.code === 'unknown_type') {
+    result.message = `No agent named '${target}' on this device`;
+  }
 
   if (flags && flags.json) {
     // Machine consumers (the daemon's probe_agent node command) read ONLY
@@ -1066,6 +1077,98 @@ async function cmdProbe(connector, flags, positional) {
   } else {
     print(`FAILED [${result.code}] ${result.message || ''}`.trim());
     for (const line of result.guidance || []) print(`  → ${line}`);
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * `agn login <type|agent>` — run the agent CLI's own sign-in on this device.
+ * See agent-login.js for why this is more than the bare login command.
+ */
+async function cmdLogin(connector, flags, positional) {
+  const target = (positional[0] || '').trim();
+  if (!target) {
+    print('Usage: agn login <type|agent>');
+    print("Signs the agent's own CLI in to its account on this device, e.g. agn login codex");
+    process.exitCode = 1;
+    return;
+  }
+  // A type first: the first agent of a type is often named after it.
+  let type = target;
+  let entry = connector.registry.getEntry(target);
+  if (!entry) {
+    const agent = connector.config.getAgent(target);
+    if (agent) {
+      type = agent.type || 'openclaw';
+      entry = connector.registry.getEntry(type);
+    }
+  }
+  if (!entry) {
+    print(`Unknown agent type or agent '${target}'. See: agn search`);
+    process.exitCode = 1;
+    return;
+  }
+  const label = entry.label || type;
+  const { loginPlan } = require('./agent-login');
+  const plan = loginPlan(entry);
+  if (!plan) {
+    print(`${label} has no sign-in of its own. Give it an API key instead, in the workspace or with: agn env ${type} --set <KEY>=<value>`);
+    process.exitCode = 1;
+    return;
+  }
+  const bin = connector.installer.which(type);
+  if (!bin) {
+    print(`${label} is not installed on this device. Install it first: agn install ${type}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  // wsl.spawn: a CLI installed inside a WSL distro signs in over there.
+  const { spawn } = require('./wsl');
+  const { getEnhancedEnv } = require('./paths');
+  const { shouldUseShellForBinary } = require('./adapters/health-status');
+  const shell = shouldUseShellForBinary(bin);
+  print(`Signing in ${label}: ${[plan.command.split(/\s+/)[0], ...plan.args].join(' ')}`);
+  if (plan.headless && plan.args.includes('--device-auth')) {
+    print('No browser on this machine: open the link below on any device and enter the code.');
+  }
+  if (!process.stdin.isTTY) {
+    print('Warning: this is not an interactive terminal. The sign-in may need one to take input; if it stalls, run this command in a terminal.');
+  }
+  print('');
+  // The CLI owns the terminal until it is done. Ctrl+C reaches it too, and it
+  // decides what that means; this process waits to report the result.
+  const ignoreInterrupt = () => {};
+  process.on('SIGINT', ignoreInterrupt);
+  const code = await new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(shell ? `"${bin}"` : bin, plan.args, {
+        stdio: 'inherit',
+        env: getEnhancedEnv(),
+        shell,
+      });
+    } catch (e) {
+      print(`Could not start ${bin}: ${e.message}`);
+      resolve(1);
+      return;
+    }
+    child.on('error', (e) => { print(`Could not start ${bin}: ${e.message}`); resolve(1); });
+    child.on('exit', (c) => resolve(c == null ? 1 : c));
+  });
+  process.removeListener('SIGINT', ignoreInterrupt);
+
+  // The CLI's word is not enough (some exit 0 on a cancelled login): ask the
+  // same readiness check the daemon uses, with keys not counting.
+  let ready = false;
+  try { ready = !!connector.installer.healthCheck(type, { cliLogin: true }).ready; } catch {}
+  // Have a running daemon re-detect and report, so the workspace updates now.
+  try { connector.sendDaemonCommand('detect'); } catch {}
+  print('');
+  if (ready) {
+    print(`✓ ${label} is signed in on this device. The workspace will show it as ready shortly.`);
+  } else {
+    print(`✗ ${label} is still not signed in${code ? ` (the login exited with code ${code})` : ''}.`);
     process.exitCode = 1;
   }
 }
@@ -1163,15 +1266,19 @@ Commands:
   status                      Show agent status
   list                        List configured agents
   create <name> [--type T]    Create a new agent
+    --description TEXT       Default published capability summary for new workspace memberships
   remove <name>               Remove an agent
   start <name>                Start a single agent
   stop <name>                 Stop a single agent
   install <type>              Install an agent runtime
   uninstall <type>            Uninstall an agent runtime
+  login <type|agent>          Sign the agent's own CLI in to its account (e.g. agn login codex)
   search [query]              Browse agent catalog
   runtimes                    List installed runtimes
   device connect <code>       Pair this device (formerly "node") to a workspace with a pairing code
   device status               Show the workspaces this device is paired with (alias: node)
+  join <code>                 Run from inside Claude Code, Codex, ...: connect that agent to a workspace
+                              [--name <agent-name>] [--type <type>] [--path <dir>] [--no-autostart]
   connect <agent> <token>     Connect agent to workspace (or --workspace <slug> for a paired one)
   disconnect <agent>          Disconnect agent from workspace
   env <type> [--set K=V]      View/set env vars for agent type
@@ -1217,6 +1324,8 @@ async function main() {
     (cmd === 'up' && flags.foreground) ||
     cmd === 'tui' ||
     cmd === 'update' ||
+    // npx …@latest join: already the newest, and its output is read by an agent
+    cmd === 'join' ||
     flags['no-update-check'] ||
     process.env.OPENAGENTS_SKIP_UPDATE_CHECK === '1' ||
     (cmd === 'status' && process.argv.length <= 2 && process.stdin.isTTY);
@@ -1261,6 +1370,7 @@ async function main() {
     search: () => cmdSearch(connector, flags, positional),
     runtimes: () => cmdRuntimes(connector, flags),
     connect: () => cmdConnect(connector, flags, positional),
+    join: () => cmdJoin(connector, flags, positional),
     device: () => cmdNode(connector, flags, positional),
     devices: () => cmdNode(connector, flags, positional),
     node: () => cmdNode(connector, flags, positional),     // legacy spelling
@@ -1275,6 +1385,7 @@ async function main() {
     'test-llm': () => cmdTestLLM(connector, flags, positional),
     probe: () => cmdProbe(connector, flags, positional),
     models: () => cmdModels(connector, flags, positional),
+    login: () => cmdLogin(connector, flags, positional),
     update: () => cmdUpdate(connector),
     'mcp-server': () => {
       const { runMcpServer } = require('./mcp-server');

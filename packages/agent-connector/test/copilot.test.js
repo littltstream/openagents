@@ -180,6 +180,9 @@ describe('CopilotAdapter — prompt & permission safety', () => {
       scenario: 'success', argsFile,
       env: { COPILOT_GITHUB_TOKEN: '', GH_TOKEN: '', GITHUB_TOKEN: '', OA_WORKSPACE_TOKEN: '' },
     });
+    // BaseAdapter now supplies its own credential for collaboration CLI calls.
+    // Clear that too to preserve this test's genuinely credential-free premise.
+    a.agentEnv.OA_WORKSPACE_TOKEN = '';
     await a._handleMessage(msg('hi'));
     const args = JSON.parse(fs.readFileSync(argsFile, 'utf-8'));
     assert.ok(!args.some((x) => x.startsWith('--secret-env-vars')), 'no meaningless secret-env-vars arg');
@@ -269,6 +272,49 @@ describe('CopilotAdapter — registry/adapter consistency', () => {
       'registry min_version must equal adapter MIN_VERSION');
     assert.equal(copilot.install.binary, 'copilot', 'detects the official binary, not gh');
     assert.equal(copilot.install.npm_package, '@github/copilot');
+  });
+});
+
+describe('CopilotAdapter — prompt too long for a command line', () => {
+  // Past the platform's argv limit (100k here, 24k on Windows) — on Windows a
+  // channel's system prompt plus a pinned glossary failed the spawn itself
+  // with ENAMETOOLONG.
+  const LONG = 'x'.repeat(120000);
+
+  it('pipes the prompt over stdin instead of -p', async () => {
+    const argsFile = path.join(tmp, 'args.json');
+    const stdinFile = path.join(tmp, 'stdin.txt');
+    const a = makeAdapter({ scenario: 'success', argsFile, env: { MOCK_COPILOT_ECHO_STDIN_FILE: stdinFile } });
+    a._versionGate = { version: '1.0.109', compatible: true };
+    await a._handleMessage(msg(LONG));
+    const args = JSON.parse(fs.readFileSync(argsFile, 'utf-8'));
+    assert.ok(!args.includes('-p'), 'no -p when the prompt goes over stdin');
+    assert.ok(args.includes('--output-format'), 'the rest of the argv is unchanged');
+    const piped = fs.readFileSync(stdinFile, 'utf-8');
+    assert.ok(piped.includes(LONG), 'the whole prompt reached stdin');
+    assert.match(piped, /User message:/);
+    assert.equal(a.sent.find((s) => s.type === 'response').content, 'All done. Created src/x.js.');
+    assert.ok(a.logs.some((l) => /prompt on stdin/.test(l)));
+  });
+
+  it('keeps a normal prompt on -p', async () => {
+    const argsFile = path.join(tmp, 'args.json');
+    const a = makeAdapter({ scenario: 'success', argsFile });
+    await a._handleMessage(msg('hi'));
+    const args = JSON.parse(fs.readFileSync(argsFile, 'utf-8'));
+    assert.equal(args[0], '-p');
+  });
+
+  it('asks a CLI older than stdin prompt support to upgrade, without spawning', async () => {
+    const argsFile = path.join(tmp, 'args.json');
+    const a = makeAdapter({ scenario: 'success', argsFile });
+    a._versionGate = { version: '1.0.63', compatible: true };
+    await a._handleMessage(msg(LONG));
+    const err = a.sent.find((s) => s.type === 'error');
+    assert.match(err.content, /too long/);
+    assert.match(err.content, /1\.0\.78 or newer/);
+    assert.match(err.content, /copilot update/);
+    assert.ok(!fs.existsSync(argsFile), 'no turn was spawned');
   });
 });
 

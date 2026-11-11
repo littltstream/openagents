@@ -13,12 +13,32 @@
  * rather than a tweak to the gemini adapter.
  */
 
-const { redactSecrets } = require('./utils');
+const { redactSecrets, promptFitsArgv } = require('./utils');
 
-/** Build the argv tail (everything after the binary) for one headless run. */
-function buildAgyArgv({ prompt, model, conversationId, skipResume = false } = {}) {
+/**
+ * Longest prompt passed as `-p <prompt>`; past it the prompt goes over stdin
+ * (agyStdinMessage). The limits are shared — see promptFitsArgv in utils.
+ */
+function agyPromptFitsArgv(prompt, platform = process.platform) {
+  return promptFitsArgv(prompt, platform);
+}
+
+/**
+ * The stdin line for a prompt sent with `--input-format stream-json` — the
+ * only stdin input headless agy accepts (plain-text stdin is not read, and a
+ * `-p` prompt is dropped in this mode). antigravity.google/docs/cli/headless
+ */
+function agyStdinMessage(prompt) {
+  return `${JSON.stringify({ event: 'user', message: { content: String(prompt || '') } })}\n`;
+}
+
+/**
+ * Build the argv tail (everything after the binary) for one headless run.
+ * `viaStdin` leaves the prompt out: the caller writes agyStdinMessage(prompt).
+ */
+function buildAgyArgv({ prompt, model, conversationId, skipResume = false, viaStdin = false } = {}) {
   const args = [
-    '-p', prompt || '',
+    ...(viaStdin ? ['--input-format', 'stream-json'] : ['-p', prompt || '']),
     // Counterpart of gemini's `-y`: headless runs have no interactive
     // approval prompt, and a soft-denied tool call silently degrades the
     // answer. The daemon is the approval boundary here, same as every other
@@ -297,6 +317,8 @@ function agyBinaryCandidates({ home, isWindows, localAppData } = {}) {
 }
 
 module.exports = {
+  agyPromptFitsArgv,
+  agyStdinMessage,
   buildAgyArgv,
   parseAgyEvent,
   toolPreview,
