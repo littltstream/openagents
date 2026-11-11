@@ -1,4 +1,4 @@
 #!/bin/sh
 set -eu
 cd /home/weizhiyi/openagents/workspace
-exec docker compose -p openagents --env-file /home/weizhiyi/openagents-runtime/workspace.env -f docker-compose.yml -f docker-compose.keycloak.yml -f compose.server.yml -f compose.cn.yml -f /home/weizhiyi/openagents-runtime/collaboration-stage-20261111/release.yml "$@"
+exec docker compose -p openagents --env-file /home/weizhiyi/openagents-runtime/workspace.env -f docker-compose.yml -f docker-compose.keycloak.yml -f compose.server.yml -f compose.cn.yml -f /home/weizhiyi/openagents-runtime/releases/collaboration-20261111/release.yml "$@"
