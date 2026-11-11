@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { normalizeDescription } = require('../../agent-collaboration/src/description');
 
 /**
  * Manages ~/.openagents/daemon.yaml — the agent/network configuration file.
@@ -50,13 +51,15 @@ class Config {
     fs.writeFileSync(this.configFile, serializeYaml(config), 'utf-8');
   }
 
-  addAgent({ name, type, role, path: agentPath, env }) {
+  addAgent({ name, type, role, path: agentPath, env, description }) {
+    const defaultDescription = normalizeDescription(description);
     const config = this.load();
     if (config.agents.some((a) => a.name === name)) {
       throw new Error(`Agent '${name}' already exists`);
     }
     const entry = { name, type: type || 'openclaw', role: role || 'worker' };
     if (agentPath) entry.path = agentPath;
+    if (defaultDescription !== undefined) entry.description = defaultDescription;
     if (env && Object.keys(env).length > 0) entry.env = env;
     config.agents.push(entry);
     this.save(config);
@@ -73,6 +76,11 @@ class Config {
   }
 
   updateAgent(name, updates) {
+    if (Object.hasOwn(updates, 'description')) {
+      updates = { ...updates };
+      if (updates.description === undefined) delete updates.description;
+      else updates.description = normalizeDescription(updates.description);
+    }
     const config = this.load();
     const agent = config.agents.find((a) => a.name === name);
     if (!agent) throw new Error(`Agent '${name}' not found`);
@@ -345,7 +353,12 @@ function parseYaml(text) {
     // Continuation of current item (indented key: value)
     if (currentItem && indent >= 2 && stripped.includes(':')) {
       const [key, ...valParts] = stripped.split(':');
-      currentItem[key.trim()] = parseYamlValue(valParts.join(':').trim());
+      const value = valParts.join(':').trim();
+      // New capability summaries use JSON-quoted YAML strings so multiline
+      // text survives the line-oriented parser. Other fields keep their
+      // existing path/backslash handling.
+      currentItem[key.trim()] = currentList === 'agents' && key.trim() === 'description' && value.startsWith('"')
+        ? JSON.parse(value) : parseYamlValue(value);
     }
   }
 
@@ -551,7 +564,7 @@ function serializeYaml(config) {
     lines.push(`- name: ${serializeYamlValue(agent.name)}`);
     for (const key of keys) {
       if (key === 'name') continue;
-      lines.push(`  ${key}: ${serializeYamlValue(agent[key])}`);
+      lines.push(`  ${key}: ${key === 'description' && typeof agent[key] === 'string' ? JSON.stringify(agent[key]) : serializeYamlValue(agent[key])}`);
     }
   }
   if (!config.agents || config.agents.length === 0) {

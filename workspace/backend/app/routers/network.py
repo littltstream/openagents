@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
@@ -49,6 +49,7 @@ class JoinRequest(BaseModel):
     agent_type: Optional[str] = None   # "claude", "openclaw", etc.
     server_host: Optional[str] = None  # hostname/IP where agent runs
     working_dir: Optional[str] = None  # working directory on the server
+    description: Optional[str] = Field(None, max_length=4000)  # initialize an unset workspace description only
 
 class LeaveRequest(BaseModel):
     agent_name: str
@@ -251,6 +252,8 @@ def join_network(
         payload["server_host"] = body.server_host
     if body.working_dir:
         payload["working_dir"] = body.working_dir
+    if body.description is not None:
+        payload["description"] = body.description
     # A join authenticated with a node token is attributable to a device —
     # stamp it so "which machine runs this agent" is a column, not a guess.
     if body.token:
@@ -277,7 +280,7 @@ def join_network(
         # The join handler runs AFTER AuthMod, so validation problems are only
         # reported to authenticated callers — it stamps the reason on the
         # event before rejecting (see workspace_mod._handle_agent_join).
-        if event.metadata.get("reject_reason") in ("display_name_conflict", "invalid_agent_name"):
+        if event.metadata.get("reject_reason") in ("display_name_conflict", "invalid_agent_name", "invalid_agent_description"):
             return json_response(
                 ResponseCode.BAD_REQUEST,
                 event.metadata.get("reject_detail") or "Invalid agent name",
@@ -303,6 +306,7 @@ def join_network(
         "role": result.metadata.get("role", "member"),
         "status": "online",
         "session_id": result.metadata.get("session_id"),
+        "description_initialized": result.metadata["description_initialized"],
     })
 
 

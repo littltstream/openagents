@@ -102,6 +102,7 @@ class AgentConnector {
         displayName: a.display_name || null,
         type,
         role: a.role || 'worker',
+        ...(a.description !== undefined ? { description: a.description } : {}),
         network: a.network || null,
         networkName: network ? (network.name || network.slug) : null,
         path: a.path || null,
@@ -111,9 +112,9 @@ class AgentConnector {
     });
   }
 
-  addAgent({ name, type, role, path, env }) {
+  addAgent({ name, type, role, path, env, description }) {
     const agentType = type || 'openclaw';
-    this.config.addAgent({ name, type: agentType, role: role || 'worker', path, env });
+    this.config.addAgent({ name, type: agentType, role: role || 'worker', path, env, description });
     // A key entered while ADDING the agent needs the same native side effects
     // as one saved later: OpenClaw and Hermes read a custom endpoint only from
     // their own config. Without this a new agent's test passed on the form's

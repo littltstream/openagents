@@ -25,6 +25,7 @@ const { configuredModel } = require('../agent-model');
 const { buildThreadHistory } = require('./thread-history');
 const { publishResponseArtifacts } = require('./response-artifacts');
 const { ResponseOutbox } = require('./response-outbox');
+const { childEnvironment, normalizeDescription } = require('../../../agent-collaboration/src');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -168,13 +169,14 @@ class BaseAdapter {
    * @param {string} opts.agentName
    * @param {string} [opts.endpoint]
    */
-  constructor({ workspaceId, channelName, token, agentName, endpoint, agentEnv, agentType, workingDir, onStatus, logSink }) {
+  constructor({ workspaceId, channelName, token, agentName, endpoint, agentEnv, agentType, workingDir, onStatus, logSink, description }) {
     this.workspaceId = workspaceId;
     this.channelName = channelName;
     this.token = token;
     this.agentName = agentName;
+    this.description = normalizeDescription(description);
     this.endpoint = endpoint || DEFAULT_ENDPOINT;
-    this.agentEnv = agentEnv || process.env;
+    this.agentEnv = childEnvironment(agentEnv || process.env, token);
     this.agentType = agentType;
     this.workingDir = workingDir || undefined;
     // Optional callback the daemon supplies to surface live runtime/connectivity
@@ -377,6 +379,7 @@ class BaseAdapter {
         agentType: this.agentType || 'agent',
         serverHost: require('os').hostname(),
         workingDir: this.workingDir || defaultAgentWorkdir(this.agentName),
+        ...(this.description !== undefined ? { description: this.description } : {}),
       });
       this._sessionId = (joinResult && joinResult.session_id) || null;
       this._log(`Joined workspace ${this.workspaceId}${this._sessionId ? ` (session ${this._sessionId.slice(0, 8)})` : ''}`);

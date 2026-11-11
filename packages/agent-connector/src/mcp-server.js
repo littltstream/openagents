@@ -23,6 +23,7 @@ const _activeTunnels = {};
 // ── Tool definitions ────────────────────────────────────────────────────────
 
 const v11 = require('./tools-v11');
+const collaboration = require('../../agent-collaboration/src');
 
 function buildToolDefs(disabledModules) {
   const tools = [
@@ -572,6 +573,7 @@ function buildToolDefs(disabledModules) {
 
   // -- v1.1 milestone tools (always on) --
   tools.push(...v11.toolDefs());
+  tools.push(...collaboration.defs);
 
   return tools;
 }
@@ -699,6 +701,8 @@ class McpServer {
   async _dispatch(name, args) {
     const text = (t) => ({ content: [{ type: 'text', text: t }] });
     const image = (data, mime) => ({ content: [{ type: 'image', data, mimeType: mime }] });
+    const collaborationResult = await collaboration.handle(this, name, args);
+    if (collaborationResult !== undefined) return collaborationResult;
 
     switch (name) {
 
@@ -732,7 +736,7 @@ class McpServer {
         const agents = data.agents || data || [];
         if (!agents.length) return text('No agents connected.');
         const lines = agents.map((a) =>
-          `- ${a.name} (${a.type || 'unknown'}) — ${a.status || 'unknown'}${a.role ? ` [${a.role}]` : ''}`
+          `- ${a.agentName} (${a.agentType || 'unknown'}) — ${a.status || 'unknown'}${a.role ? ` [${a.role}]` : ''}${a.description ? `: ${a.description}` : ''}`
         );
         return text(lines.join('\n'));
       }

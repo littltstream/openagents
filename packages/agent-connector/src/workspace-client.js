@@ -2,6 +2,7 @@
 
 const https = require('https');
 const http = require('http');
+const { normalizeDescription } = require('../../agent-collaboration/src/description');
 
 const DEFAULT_ENDPOINT = 'https://workspace-endpoint.openagents.org';
 // Agent progress noise that never belongs in a conversation transcript.
@@ -196,15 +197,20 @@ class WorkspaceClient {
   /**
    * Join a workspace via POST /v1/join.
    */
-  async joinNetwork(agentName, token, { network, agentType, serverHost, workingDir } = {}) {
+  async joinNetwork(agentName, token, { network, agentType, serverHost, workingDir, description } = {}) {
     const body = { agent_name: agentName, token };
     if (network) body.network = network;
     if (agentType) body.agent_type = agentType;
     if (serverHost) body.server_host = serverHost;
     if (workingDir) body.working_dir = workingDir;
+    if (description !== undefined) body.description = normalizeDescription(description);
 
     const data = await this._post('/v1/join', body);
-    return data.data || data;
+    const result = data.data || data;
+    if (description !== undefined && typeof result.description_initialized !== 'boolean') {
+      throw new Error('Workspace server does not support default agent descriptions; update the backend before using --description');
+    }
+    return result;
   }
 
   /**
@@ -723,6 +729,8 @@ class WorkspaceClient {
       status: a.status || 'offline',
       enabledSkills: a.enabled_skills || null,
       model: a.model || null,
+      description: a.description || null,
+      agentType: a.agent_type || null,
     }));
   }
 

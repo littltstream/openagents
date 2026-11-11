@@ -18,7 +18,7 @@ import re
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from openagents.core.onm_events import Event, WorkspaceEventTypes
 from openagents.core.onm_mods import EventRejected, PipelineContext, TransformMod
@@ -129,6 +129,13 @@ async def _handle_agent_join(event: Event, ctx: PipelineContext) -> Optional[Eve
     agent_type = event.payload.get("agent_type") if event.payload else None
     server_host = event.payload.get("server_host") if event.payload else None
     working_dir = event.payload.get("working_dir") if event.payload else None
+    description = event.payload.get("description") if event.payload else None
+    if description is not None:
+        if not isinstance(description, str) or len(description) > 4000 or "\x00" in description:
+            event.metadata["reject_reason"] = "invalid_agent_description"
+            event.metadata["reject_detail"] = "Description must be a string of at most 4000 characters without NUL"
+            raise EventRejected("workspace_mod", "invalid_agent_description")
+        description = description.replace("\r\n", "\n").replace("\r", "\n").strip()
     # Resolve from authenticated credentials, never caller-supplied node_id.
     from app.access import resolve_machine_token
     from app.services.legacy_ownership import workspace_owner_email
@@ -225,6 +232,17 @@ async def _handle_agent_join(event: Event, ctx: PipelineContext) -> Optional[Eve
 
     workspace.last_activity_at = now
     db.flush()
+
+    # A local default initializes NULL only. A web edit (including an explicit
+    # empty string) always wins, even if it commits between our read and write.
+    event.metadata["description_initialized"] = False
+    if description is not None:
+        initialized = db.execute(update(WorkspaceMember).where(
+            WorkspaceMember.workspace_id == workspace.id,
+            WorkspaceMember.agent_name == agent_name,
+            WorkspaceMember.description.is_(None),
+        ).values(description=description))
+        event.metadata["description_initialized"] = initialized.rowcount == 1
 
     # Enrich event metadata with resolved info + session_id so the
     # router returns it to the joining client.

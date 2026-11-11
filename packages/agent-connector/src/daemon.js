@@ -1,4 +1,5 @@
 'use strict';
+const { descriptionArgs } = require('../../agent-collaboration/src/description');
 
 const fs = require('fs');
 const path = require('path');
@@ -1069,7 +1070,7 @@ async _runNodeCommand(n, cmd) {
         let workingDir = (args.workingDir || '').trim();
         if (!workingDir) workingDir = path.join(os.homedir(), '.openagents', 'agents', name);
         try { fs.mkdirSync(workingDir, { recursive: true }); } catch {}
-        const r1 = await this._runAgn(['create', name, '--type', type, '--install', '--path', workingDir]);
+        const r1 = await this._runAgn(['create', name, '--type', type, '--install', '--path', workingDir, ...descriptionArgs(args.description)]);
         if (r1.code !== 0) throw new Error(r1.stderr || r1.stdout || 'create failed');
         const installError = installFailureOf(r1.stdout);
         halfCreated = name;
@@ -1149,9 +1150,10 @@ async _runNodeCommand(n, cmd) {
           // for a type that keeps its key on the agent that is the key, the
           // endpoint and the model. The form sends only what changed, so carry
           // the rest over before applying this command.
-          const ownEnv = { ...((this.config.getAgent(name) || {}).env || {}) };
+          const ownAgent = this.config.getAgent(name) || {};
+          const ownEnv = { ...(ownAgent.env || {}) };
           await this._runAgn(['remove', name]);
-          const rc = await this._runAgn(['create', name, '--type', type, '--install', '--path', newDir]);
+          const rc = await this._runAgn(['create', name, '--type', type, '--install', '--path', newDir, ...descriptionArgs(ownAgent.description)]);
           if (rc.code !== 0) throw new Error(rc.stderr || rc.stdout || 'recreate failed');
           if (Object.keys(ownEnv).length) this.config.updateAgentEnv(name, { ...ownEnv, ...unshadow });
           this._saveNodeAgentEnv(name, type, args);
@@ -1935,6 +1937,7 @@ async _runNodeCommand(n, cmd) {
         channelName: 'general',
         token: network.token,
         agentName: name,
+        description: agentCfg.description,
         endpoint,
         agentType,
         configDir: this.config.configDir,

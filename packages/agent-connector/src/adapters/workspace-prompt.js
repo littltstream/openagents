@@ -13,6 +13,7 @@
 
 const crypto = require('crypto');
 const { renderPinnedDecisions } = require('./decision-log');
+const { buildCollaborationSection, buildCliSection } = require('../../../agent-collaboration/src');
 
 /**
  * Strong directive forcing agents to use the workspace browser when the
@@ -176,7 +177,7 @@ function buildCollaborationPrompt(toolMode = 'mcp', skillName = 'openagents-work
     )
     : (
       'Before delegating, discover who is available and what they do: call ' +
-      '`workspace_get_agents`, or the discover endpoint for full descriptions, ' +
+      '`workspace_discover_agents` for full descriptions, ' +
       'and match the task to an agent\'s description before @mentioning it.\n'
     );
   return (
@@ -188,6 +189,7 @@ function buildCollaborationPrompt(toolMode = 'mcp', skillName = 'openagents-work
     'to do work. When the task is complete, report results to the user ' +
     'without @mentioning other agents.\n\n' +
     discover +
+    buildCollaborationSection(toolMode) +
     buildHandoffPrompt(toolMode) +
     buildBriefAndDirectorPrompt(toolMode)
   );
@@ -700,6 +702,7 @@ function buildApiSkillsPrompt({ endpoint, workspaceId, token, agentName, channel
     'so cross-reference `participants` yourself as shown.)\n'
   );
 
+  sections.push(buildCliSection({ endpoint, workspaceId, agentName, channelName, mode, isWindows }));
   return sections.join('\n');
 }
 

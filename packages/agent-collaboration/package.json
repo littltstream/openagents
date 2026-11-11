@@ -1,0 +1,14 @@
+{
+  "name": "@chippilot/agent-collaboration",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Workspace collaboration tools shared by MCP and skill-driven agents",
+  "main": "src/index.js",
+  "bin": { "oa-collaboration": "bin/collaboration.js" },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "test:backend": "python -m pytest -q test/test_backend.py"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}

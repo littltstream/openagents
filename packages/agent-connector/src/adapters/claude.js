@@ -26,6 +26,7 @@ const { buildClaudeSystemPrompt, buildClaudeSkillMd, buildPinnedSections, worksp
 const { pinnedFingerprint, sampleRecap } = require('./decision-log');
 const { defaultAgentWorkdir, whichBinary, whereBinary } = require('../paths');
 const { isPostinstallStub } = require('../postinstall-stub');
+const { readToolNames, writeToolNames } = require('../../../agent-collaboration/src');
 
 const IS_WINDOWS = process.platform === 'win32';
 
@@ -576,6 +577,8 @@ class ClaudeAdapter extends BaseAdapter {
       `${pfx}workspace_status`,
     ];
     const mcpWriteTools = [];
+    mcpTools.push(...readToolNames.map((name) => `${pfx}${name}`));
+    mcpWriteTools.push(...writeToolNames.map((name) => `${pfx}${name}`));
 
     if (!this.disabledModules.has('files')) {
       mcpTools.push(`${pfx}workspace_list_files`, `${pfx}workspace_read_file`);

@@ -177,7 +177,7 @@ async function cmdStatus(connector) {
 
 async function cmdCreate(connector, flags, positional) {
   const name = positional[0];
-  if (!name) { print('Usage: agn create <name> [--type <type>] [--install]'); return; }
+  if (!name) { print('Usage: agn create <name> [--type <type>] [--description <summary>] [--install]'); return; }
   const type = flags.type || 'openclaw';
   const role = flags.role || 'worker';
 
@@ -194,7 +194,7 @@ async function cmdCreate(connector, flags, positional) {
   }
 
   try {
-    connector.addAgent({ name, type, role, path: flags.path || process.cwd() });
+    connector.addAgent({ name, type, role, path: flags.path || process.cwd(), description: flags.description });
 
     // Signal daemon to pick up the new agent
     try { connector.sendDaemonCommand('reload'); } catch {}
@@ -1255,6 +1255,7 @@ Commands:
   status                      Show agent status
   list                        List configured agents
   create <name> [--type T]    Create a new agent
+    --description TEXT       Default published capability summary for new workspace memberships
   remove <name>               Remove an agent
   start <name>                Start a single agent
   stop <name>                 Stop a single agent

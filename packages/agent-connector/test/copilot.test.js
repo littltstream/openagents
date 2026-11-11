@@ -180,6 +180,9 @@ describe('CopilotAdapter — prompt & permission safety', () => {
       scenario: 'success', argsFile,
       env: { COPILOT_GITHUB_TOKEN: '', GH_TOKEN: '', GITHUB_TOKEN: '', OA_WORKSPACE_TOKEN: '' },
     });
+    // BaseAdapter now supplies its own credential for collaboration CLI calls.
+    // Clear that too to preserve this test's genuinely credential-free premise.
+    a.agentEnv.OA_WORKSPACE_TOKEN = '';
     await a._handleMessage(msg('hi'));
     const args = JSON.parse(fs.readFileSync(argsFile, 'utf-8'));
     assert.ok(!args.some((x) => x.startsWith('--secret-env-vars')), 'no meaningless secret-env-vars arg');
