@@ -26,6 +26,7 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     Text,
     UniqueConstraint,
+    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -83,6 +84,10 @@ class EventRecord(Base):
               postgresql_include=["visibility"],
               postgresql_where=text("visibility = 'direct' AND type = 'workspace.message.posted'"),
               sqlite_where=text("visibility = 'direct' AND type = 'workspace.message.posted'")),
+        # Growth analytics: human-sent messages over created_at windows.
+        Index("idx_events_human_message_created_at", "created_at",
+              postgresql_where=text("type = 'workspace.message.posted' AND source LIKE 'human:%'"),
+              sqlite_where=text("type = 'workspace.message.posted' AND source LIKE 'human:%'")),
     )
 
 
@@ -127,6 +132,9 @@ class Workspace(Base):
     collaborators = relationship("WorkspaceCollaborator", back_populates="workspace", cascade="all, delete-orphan", lazy="selectin")
     memberships = relationship("WorkspaceMembership", back_populates="workspace", cascade="all, delete-orphan")
     nodes = relationship("Node", back_populates="workspace", cascade="all, delete-orphan")
+
+    # Sign-in looks up legacy-owned workspaces by lower(creator_email) (migration 095).
+    __table_args__ = (Index("idx_workspaces_creator_email_lower", func.lower(creator_email)),)
 
 
 class WorkspaceMember(Base):
@@ -224,6 +232,9 @@ class Channel(Base):
     created_by = Column(Text, nullable=True)
     master_agent = Column(Text, nullable=True)       # per-channel master
     resume_from = Column(Text, nullable=True)         # channel name to resume context from
+    # Thread fork lineage: the source thread's name and the last message copied.
+    forked_from = Column(Text, nullable=True)
+    forked_at_event_id = Column(Text, nullable=True)
     # Multi-agent collaboration mode for this thread:
     #   "dynamic"  → LLM router picks next speaker (generic prompt) [default]
     #   "master"   → deterministic star: humans + sub-agents route to the
@@ -385,8 +396,8 @@ class User(Base):
     firebase_uid = Column(Text, nullable=True)           # Google/Firebase `uid` claim
     apple_sub = Column(Text, nullable=True)              # Sign in with Apple `sub` claim
     display_name = Column(Text, nullable=True)
-    # User-set profile picture: an https:// URL or a small data:image/... URL
-    # (the frontend downscales uploads client-side before saving).
+    # Profile picture: a user-set photo or the verified provider's default.
+    # Uploaded images are downscaled client-side to a small data:image URL.
     avatar_url = Column(Text, nullable=True)
     # Has this account dismissed the first-run welcome? Per-account (not
     # per-device) so mobile onboarding shows exactly once across devices.
@@ -657,6 +668,34 @@ class FileRecord(Base):
     )
 
 
+class FileShareLink(Base):
+    """An "anyone with the link" view link for one file.
+
+    Opening /share/file/<token> needs no sign-in and no workspace membership.
+    A file has at most one live link; revoking stamps revoked_at, and sharing
+    again mints a new token, so an old link never comes back to life.
+    """
+    __tablename__ = "file_share_links"
+
+    id = Column(Text, primary_key=True, default=_uuid)
+    workspace_id = Column(UUID(as_uuid=False), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    file_id = Column(Text, ForeignKey("files.id", ondelete="CASCADE"), nullable=False)
+    token = Column(Text, unique=True, nullable=False)
+    created_by = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_now, server_default=text("NOW()"))
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("idx_file_share_links_file", "file_id"),
+        # At most one live link per file, even when two creates race.
+        Index(
+            "uq_file_share_links_live", "file_id", unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+            sqlite_where=text("revoked_at IS NULL"),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Shared browser
 # ---------------------------------------------------------------------------
@@ -823,9 +862,26 @@ class TodoRecord(Base):
     )
 
 
+class IssueBoard(Base):
+    """An extra issue board. Issues with no board are on the default
+    "Team issues" board, which is not stored and cannot be removed."""
+    __tablename__ = "issue_boards"
+    id = Column(Text, primary_key=True, default=_uuid)
+    workspace_id = Column(UUID(as_uuid=False), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    name = Column(Text, nullable=False)
+    created_by = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_now, server_default=text("NOW()"))
+
+    __table_args__ = (
+        Index("idx_issue_boards_workspace", "workspace_id"),
+    )
+
+
 class Issue(Base):
     """A durable team discussion; creating one never starts agent work."""
     __tablename__ = "issues"
+    # NULL = the default "Team issues" board.
+    board_id = Column(Text, ForeignKey("issue_boards.id", ondelete="SET NULL"), nullable=True, index=False)
 
     knowledge_ids = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
     file_ids = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
@@ -845,7 +901,10 @@ class Issue(Base):
     created_at = Column(DateTime(timezone=True), default=_now, server_default=text("NOW()"))
     updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now, server_default=text("NOW()"))
 
-    __table_args__ = (Index("idx_issues_workspace_status", "workspace_id", "status"),)
+    __table_args__ = (
+        Index("idx_issues_workspace_status", "workspace_id", "status"),
+        Index("idx_issues_board", "board_id"),
+    )
 
 
 class IssueAgentSharing(Base):
@@ -1137,6 +1196,38 @@ class CloudAgentConfig(Base):
     __table_args__ = (
         UniqueConstraint("workspace_id", "agent_name", name="uq_cloud_agent_workspace_name"),
         Index("idx_cloud_agent_workspace", "workspace_id"),
+    )
+
+
+class HostedAgent(Base):
+    """An agent whose runtime an external provider (Acenta) hosts for this workspace.
+
+    Unlike CloudAgentConfig, the server never calls a model for it: the hosted
+    runtime joins as a normal agent over a dedicated connection (``node_id``),
+    so presence comes from real heartbeats. Deleting that connection revokes
+    the runtime's credential.
+    """
+    __tablename__ = "hosted_agents"
+
+    id = Column(Text, primary_key=True, default=_uuid)
+    workspace_id = Column(UUID(as_uuid=False), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    provider = Column(Text, nullable=False, default="acenta")
+    # Assigned by the provider; NULL until the launch call returns.
+    agent_name = Column(Text, nullable=True)
+    display_name = Column(Text, nullable=False)
+    external_id = Column(Text, nullable=True)
+    node_id = Column(UUID(as_uuid=False), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True)
+    owner_email = Column(Text, nullable=False)
+    # launching | setup (owner must finish sign-in/payment on Acenta) | active | terminating,
+    # or linked | unlinking for an existing agent added from the owner's Acenta account
+    status = Column(Text, nullable=False, default="launching")
+    # Acenta launch page while status is "setup"; it requires the owner's sign-in.
+    setup_url = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_now, server_default=text("NOW()"))
+
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "agent_name", name="uq_hosted_agent_workspace_name"),
+        Index("idx_hosted_agent_workspace", "workspace_id"),
     )
 
 

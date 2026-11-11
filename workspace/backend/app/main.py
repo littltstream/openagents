@@ -19,7 +19,10 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError, TimeoutError as PoolTimeoutError
 
 from app.config import config
-from app.routers import web_projects, reactions, agent_services, account, agent_profile, app_version, approvals, auth, briefs, browser, campaign, pilot, cloud_agents, devices, events, feedback, fetch, files, grants, groups, integrations, invites, issues, knowledge, model_access, network, nodes, notifications, onboarding, read_state, registry, routines, search, shares, sharing, tasks, thread_access, timers, todos, watches, workflows, workspaces
+# Registers the commit hooks that invalidate cached permission results; it must
+# load before any request can write permission rows.
+import app.services.permission_cache  # noqa: E402,F401
+from app.routers import file_links, web_projects, reactions, agent_services, account, agent_profile, app_version, approvals, auth, briefs, browser, campaign, pilot, cloud_agents, devices, hosted_agents, events, feedback, fetch, files, grants, groups, integrations, invites, issues, knowledge, model_access, network, nodes, notifications, onboarding, read_state, registry, routines, search, shares, sharing, tasks, thread_access, timers, todos, watches, workflows, workspaces
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -612,6 +615,10 @@ class AgentIdentityMiddleware:
 
 app.add_middleware(AgentIdentityMiddleware)
 
+from app.request_auth import RequestAuthMiddleware
+
+app.add_middleware(RequestAuthMiddleware)
+
 
 # Log Pydantic validation failures with the offending body so we can
 # debug client/server schema drift from CloudWatch instead of guessing
@@ -654,11 +661,13 @@ app.include_router(campaign.router)
 app.include_router(pilot.router)
 app.include_router(browser.router)
 app.include_router(cloud_agents.router)
+app.include_router(hosted_agents.router)
 app.include_router(devices.router)
 app.include_router(events.router)
 app.include_router(feedback.router)
 app.include_router(fetch.router)
 app.include_router(files.router)
+app.include_router(file_links.router)
 app.include_router(web_projects.router)
 app.include_router(integrations.router)
 app.include_router(invites.router)
@@ -686,6 +695,15 @@ app.include_router(workspaces.router)
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/health/router/{role}")
+def router_health(role: str):
+    """Routing model availability and latency (role: message | general).
+    503 when fewer than 90% of recent calls succeeded or there is no data."""
+    from app.services.router_health import summary
+    status, body = summary(role)
+    return JSONResponse(body, status_code=status)
 
 
 @app.get("/ready")

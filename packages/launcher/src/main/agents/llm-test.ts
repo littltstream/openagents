@@ -227,6 +227,14 @@ const MODEL_REJECTED =
   /model.{0,60}?(is not available|does not exist|not found|unknown model|invalid model|no such model|not supported)/is
 
 /**
+ * The test asks for a few tokens to stay cheap. A reasoning model can spend
+ * them all thinking, and OpenAI then refuses with "Could not finish the message
+ * because max_tokens or model output limit was reached". The key and the model
+ * were both accepted, which is everything this test checks.
+ */
+const OUTPUT_LIMIT_REACHED = /max_tokens or model output limit was reached/i
+
+/**
  * Turn an endpoint's rejection into something the user can act on.
  *
  * The failure that sent people to support was a bare `HTTP 400: {"detail":
@@ -268,6 +276,7 @@ const HOSTED_PLATFORMS: Array<{ vars: string[]; reason: string }> = [
   { vars: ["CURSOR_API_KEY"], reason: "cursor" },
   { vars: ["CODEARTS_CLI_AK", "CODEARTS_CLI_SK"], reason: "codearts" },
   { vars: ["QODER_PERSONAL_ACCESS_TOKEN", "QODERCN_PERSONAL_ACCESS_TOKEN"], reason: "qoder" },
+  { vars: ["KIRO_API_KEY"], reason: "kiro" },
 ]
 
 type OpenAIProbe = {
@@ -348,6 +357,7 @@ async function probeOpenAI(o: OpenAIProbe): Promise<LLMTestResult> {
       } catch {}
       return { success: true, model: used, response: String(reply).slice(0, 80) }
     }
+    if (OUTPUT_LIMIT_REACHED.test(text)) return { success: true, model, response: "" }
     last = { status, text, model }
     // Anything that is NOT the catalogue being wrong — a bad key, a dead host,
     // a rate limit — is the answer, and trying another model would only hide
@@ -507,6 +517,7 @@ async function probeGemini(o: {
  */
 export async function testLLMConnection(
   env: Record<string, string>,
+  agentType?: string,
 ): Promise<LLMTestResult> {
   const pick = (...names: string[]): string => {
     for (const n of names) {
@@ -1031,6 +1042,9 @@ export async function testLLMConnection(
       // true of the vendor APIs these defaults belong to, and false of every
       // relay and gateway (they answer /models, and that answer wins).
       fallbackModel: hasKimi ? "kimi-k2.6" : "gpt-4o-mini",
+      // OpenAI fields are shared by several agents; only Codex owns this mode.
+      responsesApi:
+        agentType === "codex" && pick("CODEX_WIRE_API").toLowerCase() === "responses",
     })
   } catch (e) {
     return { success: false, error: (e as Error)?.message || "Request failed" }

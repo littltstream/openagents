@@ -25,6 +25,9 @@ export interface HealthCheck {
   // "no credentials at all" (no_credentials).
   auth_status?: string | null
   execution_mode?: string
+  // false when `ready` rests on a key one of the type's agents holds, which a
+  // new agent does not get. Absent when the type is judged on its own.
+  typeReady?: boolean
 }
 
 /**
@@ -731,6 +734,16 @@ declare global {
        */
       setChromeDimmed(dim: boolean): Promise<unknown>
       getAllSettings(): Promise<Record<string, unknown>>
+      /** Whether the local connector (the daemon) runs on this device. */
+      getLocalConnector(): Promise<boolean | null>
+      /** Starts or stops the daemon, taking local agents online or offline. */
+      setLocalConnector(enabled: boolean): Promise<{
+        success: boolean
+        enabled: boolean
+        message?: string
+      }>
+      /** Pushed when the connector is switched from anywhere, Settings or not. */
+      onLocalConnectorChanged(cb: (enabled: boolean) => void): void
       exportSettings(): Promise<string>
       exportSettingsToFile(): Promise<{
         ok: boolean
@@ -760,10 +773,10 @@ declare global {
       }>
       listPaths(): Promise<{
         userData: string
-        logs: string
-        downloads: string
+        logs?: string
+        downloads?: string
         home: string
-        cache: string
+        cache?: string
         portableNode: string
         openagentsHome: string
       }>

@@ -14,8 +14,8 @@ import { HumanAvatar } from '@/components/chat/human-avatar';
 import { AgentAvatar } from '@/components/agents/agent-avatar';
 
 function AssigneeAvatar({ id }: { id: string }) {
-  if (!id) return <span className="flex size-7 shrink-0 items-center justify-center rounded-full border border-dashed text-muted-foreground"><UserRound className="size-3.5" /></span>;
-  return id.startsWith('openagents:') ? <AgentAvatar name={id.slice(11)} size={28} /> : <HumanAvatar email={id.slice(6)} />;
+  if (!id) return <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-dashed text-muted-foreground"><UserRound className="size-3.5" /></span>;
+  return id.startsWith('openagents:') ? <AgentAvatar name={id.slice(11)} size={20} /> : <HumanAvatar email={id.slice(6)} className="size-5" />;
 }
 
 export function IssueProperties({ issue, busy, update }: {
@@ -46,7 +46,10 @@ export function IssueProperties({ issue, busy, update }: {
   const actor = email ? `human:${email}` : '';
   const canAssign = !!actor && (actor === issue.created_by || actor === issue.assignee || owned.some(agent => `openagents:${agent.agentName}` === issue.assignee));
   const choices = team.map(person => ({ id: `human:${person.email.toLowerCase()}`, name: person.displayName || person.email }));
-  const selectedName = choices.find(choice => choice.id === issue.assignee)?.name || issue.assignee_name || issue.assignee || t('issues.unassigned');
+  const selectedName = choices.find(choice => choice.id === issue.assignee?.toLowerCase())?.name
+    || agents.find(agent => `openagents:${agent.agentName}` === issue.assignee)?.displayName
+    || issue.assignee_name || issue.participants.find(person => person.source === issue.assignee)?.name
+    || issue.assignee?.replace(/^(human:|openagents:)/, '') || t('issues.unassigned');
   const filtered = choices.filter(choice => `${choice.name} ${choice.id}`.toLowerCase().includes(search.toLowerCase()));
   const labels = issue.labels || [];
   const validLabel = !!label.trim() && !labels.some(item => item.toLowerCase() === label.trim().toLowerCase());
@@ -59,11 +62,11 @@ export function IssueProperties({ issue, busy, update }: {
   };
   const assign = (id: string | null) => { update({ assignee: id }); setAssignOpen(false); };
   return <>
-    <section className="space-y-2">
-      <h3 id={`issue-assignee-${issue.id}`} className="text-[11px] font-medium text-muted-foreground">{t('issues.assignee')}</h3>
+    <section className="flex min-w-0 items-center gap-2">
+      <h3 id={`issue-assignee-${issue.id}`} className="shrink-0 text-[11px] font-medium text-muted-foreground">{t('issues.assignee')}</h3>
       <Popover open={assignOpen} onOpenChange={open => { setAssignOpen(open); setSearch(''); }}>
         <PopoverTrigger asChild>
-          <button type="button" disabled={busy || !canAssign} aria-labelledby={`issue-assignee-${issue.id}`} className="group flex min-h-10 w-full items-center gap-2.5 rounded-lg border border-transparent px-1.5 py-1.5 text-left transition-colors enabled:hover:border-border enabled:hover:bg-muted/40 disabled:cursor-default">
+          <button type="button" disabled={busy || !canAssign} aria-labelledby={`issue-assignee-${issue.id}`} className="group flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-transparent px-1.5 py-1 text-left transition-colors enabled:hover:border-border enabled:hover:bg-muted/40 disabled:cursor-default">
             <AssigneeAvatar id={issue.assignee || ''} />
             <span className={`min-w-0 flex-1 truncate text-xs font-medium ${issue.assignee ? '' : 'text-muted-foreground'}`}>{selectedName}</span>
             {canAssign && <ChevronDown className="size-3.5 shrink-0 text-muted-foreground/60 group-hover:text-foreground" />}
@@ -87,14 +90,14 @@ export function IssueProperties({ issue, busy, update }: {
       </Popover>
     </section>
     <IssueDueDate issue={issue} busy={busy} canEdit={!!actor && actor === issue.created_by.toLowerCase()} update={update} />
-    <section className="space-y-2.5">
-      <div className="flex items-center justify-between">
-        <h3 className="text-[11px] font-medium text-muted-foreground">{t('issues.labels')}</h3>
+    <section className="flex min-w-0 flex-wrap items-center gap-2">
+      <div className="flex shrink-0 items-center gap-1">
+        <h3 className="shrink-0 text-[11px] font-medium text-muted-foreground">{t('issues.labels')}</h3>
         <button type="button" disabled={busy || labels.length >= 20} onClick={() => setAddingLabel(!addingLabel)} aria-label={t('issues.addLabel')} aria-expanded={addingLabel} className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"><Plus className="size-3.5" /></button>
       </div>
-      {labels.length ? <div className="flex flex-wrap gap-1.5">{labels.map(value => <IssueLabel key={value} label={value} disabled={busy} onRemove={() => update({ labels: labels.filter(item => item !== value) })} />)}</div>
+      {labels.length ? <div className="flex min-w-0 flex-wrap gap-1.5">{labels.map(value => <IssueLabel key={value} label={value} disabled={busy} onRemove={() => update({ labels: labels.filter(item => item !== value) })} />)}</div>
         : !addingLabel && <button type="button" disabled={busy} onClick={() => setAddingLabel(true)} className="flex items-center gap-2 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:text-foreground"><Tag className="size-3.5" />{t('issues.addLabel')}</button>}
-      {addingLabel && <form className="relative" onSubmit={event => { event.preventDefault(); addLabel(label); }}>
+      {addingLabel && <form className="relative min-w-0 flex-1" onSubmit={event => { event.preventDefault(); addLabel(label); }}>
         <Input autoFocus id={`issue-label-${issue.id}`} aria-label={t('issues.addLabel')} className="h-9 min-w-0 pr-9 text-xs" maxLength={40} disabled={busy || labels.length >= 20} placeholder={t('issues.labelName')} value={label} role="combobox" aria-autocomplete="list" aria-expanded={suggestions.length > 0} aria-controls={`issue-label-options-${issue.id}`} aria-activedescendant={activeLabel >= 0 && suggestions[activeLabel] ? `issue-label-option-${issue.id}-${activeLabel}` : undefined}
           onChange={event => { setLabel(event.target.value); setActiveLabel(-1); }}
           onKeyDown={event => {

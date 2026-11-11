@@ -14,9 +14,11 @@ import { useDesktopThreadLinks } from './use-desktop-thread-links';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { AppSidebar } from './app-sidebar';
 import { AppHeader } from './app-header';
+import { OnboardingSurfaceContext } from './onboarding-surface';
 import { MobileHeader } from './mobile-header';
 import { useLayout, RAIL_WIDTH_COLLAPSED, RAIL_WIDTH_EXPANDED } from './layout-context';
 import { isRecentAgent } from '@/lib/helpers';
+import { shouldOpenFirstRunOnboarding } from '@/lib/first-run-entry';
 import { ChatView } from '@/components/chat/chat-view';
 import { ThreadList } from '@/components/threads/thread-list';
 import { FileList } from '@/components/files/file-list';
@@ -94,7 +96,7 @@ export function Wrapper() {
     const q = hash.indexOf('?');
     if (q >= 0 && new URLSearchParams(hash.slice(q + 1)).has('agent')) openView('agents');
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const { workspaceLoadError, retryWorkspace, monitorMode, agents, loading, sessions, currentSessionId, currentUser, selectedFileId, selectedKnowledgeId } = useWorkspace();
+  const { workspace, workspaceLoadError, retryWorkspace, monitorMode, agents, loading, sessions, currentSessionId, currentUser, selectedFileId, selectedKnowledgeId } = useWorkspace();
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   // Resolve a stable identity before writing the URL; never expose DM participants.
   useEffect(() => {
@@ -103,7 +105,7 @@ export function Wrapper() {
     const update = async () => {
       const url = new URL(window.location.href);
       const workspaceSlug = decodeURIComponent(url.pathname.split('/')[1]);
-      if (viewMode === 'issues' || viewMode === 'tasks') return;
+      if (viewMode === 'issues') return;
       if (viewMode === 'files' || viewMode === 'knowledge') {
         url.pathname = resourcePath(workspaceSlug, viewMode, viewMode === 'files' ? selectedFileId : selectedKnowledgeId);
       } else if (viewMode === 'threads' && currentSessionId) {
@@ -147,25 +149,41 @@ export function Wrapper() {
   // hidden from the sidebar, so it must not silently block onboarding either —
   // otherwise the workspace looks empty yet never onboards (matches nav's rule).
   const hasAgents = agents.some((a) => isRecentAgent(a) && !a.builtin);
-  // Guided onboarding takes over only for a genuinely fresh workspace: no real
-  // agent AND no user-created threads yet. Gating on threads protects an
-  // established workspace (with history) from being hijacked by onboarding
-  // when its agent happens to be offline > 1h.
-  //
-  // Two carve-outs keep that gate honest:
-  //  • Yumi's seeded "Welcome" thread (mobile funnel) is created by the
-  //    backend in EVERY fresh workspace — a builtin-led thread is not user
-  //    activity, or no workspace would ever onboard.
-  //  • Only an explicit DM selection (clicking Yumi in the sidebar → a `dm:`
-  //    id) overrides the takeover. Auto-selection picks channel ids, so a
-  //    plain `!currentSessionId` gate would let the seeded thread's
-  //    auto-selection suppress onboarding too.
+  // Keep setup available from Connect Agent without replacing conversations.
   const userSessions = sessions.filter(
     (s) => !(s.master && agents.some((a) => a.builtin && a.agentName === s.master)),
   );
+  const firstRunEntryChecked = useRef<string | null>(null);
+  useEffect(() => {
+    if (loading || workspaceLoadError || !workspace || !currentUser.id) return;
+    const key = `oa:firstRunEntry:${workspace.workspaceId}:${currentUser.id}`;
+    if (firstRunEntryChecked.current === key) return;
+    firstRunEntryChecked.current = key;
+    const path = window.location.pathname.split('/').filter(Boolean);
+    const inviteHash = window.location.hash.split('?')[1];
+    if (!shouldOpenFirstRunOnboarding({
+      needsFirstDevice: workspace.needsFirstDevice === true,
+      hasAgents,
+      hasUserSessions: userSessions.length > 0,
+      isDirectMessage: currentSessionId?.startsWith('dm:') === true,
+      isWorkspaceLanding: (path.length === 1 || (path.length === 3 && path[1] === 'threads')) &&
+        !(inviteHash && new URLSearchParams(inviteHash).has('agent')),
+      viewMode,
+    })) return;
+    try {
+      if (localStorage.getItem(key) === '1') return;
+      localStorage.setItem(key, '1');
+    } catch { /* Private browsing still gets setup once per mounted workspace. */ }
+    openView('connect');
+  }, [loading, workspaceLoadError, workspace, currentUser.id, hasAgents, userSessions.length, currentSessionId, viewMode, openView]);
   const showOnboarding =
-    !onboardingDismissed && !hasAgents && userSessions.length === 0 && viewMode === 'threads' &&
+    !onboardingDismissed && !hasAgents && userSessions.length === 0 && viewMode === 'connect' &&
     !currentSessionId?.startsWith('dm:');
+
+  const dismissOnboarding = () => {
+    setOnboardingDismissed(true);
+    if (viewMode === 'connect') openView('threads');
+  };
 
   if (loading) {
     return <WorkspaceLoadingScreen />;
@@ -178,13 +196,14 @@ export function Wrapper() {
   // ── Mobile layout: single-pane with list/detail switching ──
   if (isMobile) {
     return (
+      <OnboardingSurfaceContext.Provider value={{ active: showOnboarding, onDismiss: dismissOnboarding }}>
       <div className="flex flex-col h-[calc(100vh-var(--oa-banner-h,0px))] w-full [&_.container-fluid]:px-5">
         <MobileHeader />
         <div className="flex-1 min-h-0 pt-[var(--header-height-mobile)] pb-[calc(48px+env(safe-area-inset-bottom))]">
           {/* Full-screen views (no list/detail split) */}
           {showOnboarding ? (
             <div className="h-full bg-background overflow-hidden">
-              <FirstRunOnboarding onDismiss={() => setOnboardingDismissed(true)} />
+              <FirstRunOnboarding onDismiss={dismissOnboarding} />
             </div>
           ) : viewMode === 'connect' ? (
             <div className="h-full bg-background overflow-hidden">
@@ -192,10 +211,6 @@ export function Wrapper() {
             </div>
           ) : viewMode === 'issues' ? (
             <div className="h-full bg-background overflow-hidden"><IssuesView /></div>
-          ) : viewMode === 'tasks' ? (
-            <div className="h-full bg-background overflow-hidden">
-              <IssuesView initialWork />
-            </div>
           ) : viewMode === 'workflows' ? (
             <div className="h-full bg-background overflow-hidden">
               <WorkflowsView />
@@ -255,6 +270,7 @@ export function Wrapper() {
 
         <NewThreadDialogHost />
       </div>
+      </OnboardingSurfaceContext.Provider>
     );
   }
 
@@ -280,6 +296,7 @@ export function Wrapper() {
   const shellWidth = railWidth + (sidebarOpen ? 388 : 0);
 
   return (
+    <OnboardingSurfaceContext.Provider value={{ active: showOnboarding, onDismiss: dismissOnboarding }}>
     <SidebarProvider
       open={sidebarOpen}
       onOpenChange={setSidebarOpen}
@@ -293,13 +310,12 @@ export function Wrapper() {
       <AppSidebar />
 
       <SidebarInset className="min-w-0">
-        <AppHeader />
+        {!showOnboarding && viewMode !== 'connect' && <AppHeader />}
         <div className="relative flex min-h-0 grow overflow-hidden">
           {showOnboarding ? (
-            /* No agents yet: guided first-run onboarding (choose node vs local,
-               node recommended) → hands off to the Connect view. */
+            /* Guided first-agent setup owns the full Connect Agent surface. */
             <div className="relative flex-1 min-w-0 overflow-hidden bg-background">
-              <FirstRunOnboarding onDismiss={() => setOnboardingDismissed(true)} />
+              <FirstRunOnboarding onDismiss={dismissOnboarding} />
             </div>
           ) : viewMode === 'threads' && monitorMode ? (
             /* Monitor mode: 2x3 grid over the whole detail area */
@@ -345,7 +361,6 @@ export function Wrapper() {
               {visitedViews.current.has('browser') && <Activity mode={viewMode === 'browser' ? 'visible' : 'hidden'}><BrowserView /></Activity>}
               {visitedViews.current.has('connect') && <Activity mode={viewMode === 'connect' ? 'visible' : 'hidden'}><ConnectAgentView /></Activity>}
               {visitedViews.current.has('issues') && <Activity mode={viewMode === 'issues' ? 'visible' : 'hidden'}><IssuesView /></Activity>}
-              {visitedViews.current.has('tasks') && <Activity mode={viewMode === 'tasks' ? 'visible' : 'hidden'}><IssuesView initialWork /></Activity>}
               {visitedViews.current.has('workflows') && <Activity mode={viewMode === 'workflows' ? 'visible' : 'hidden'}><WorkflowsView /></Activity>}
               {visitedViews.current.has('inbox') && <Activity mode={viewMode === 'inbox' ? 'visible' : 'hidden'}><InboxView /></Activity>}
               {visitedViews.current.has('skills') && <Activity mode={viewMode === 'skills' ? 'visible' : 'hidden'}><SkillsView /></Activity>}
@@ -361,5 +376,6 @@ export function Wrapper() {
 
       <NewThreadDialogHost />
     </SidebarProvider>
+    </OnboardingSurfaceContext.Provider>
   );
 }

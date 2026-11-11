@@ -48,14 +48,15 @@ test('library creation publishes a local default without installing skills or mu
   assert.equal(connector.config.getAgent('invalid'), null);
 });
 
-test('agn create accepts --description and rejects a missing argument without writing an agent', async (t) => {
+test('agn create resolves a relative --path, preserves --description, and rejects a missing argument', async (t) => {
   const dir = temporaryConfig(t);
   const cli = path.resolve(__dirname, '../../agent-connector/bin/agent-connector.js');
   const env = { ...process.env, HOME: dir, USERPROFILE: dir, OPENAGENTS_SKIP_UPDATE_CHECK: '1' };
   const description = 'CSV 芯片分析\n不上传源数据';
-  await exec(process.execPath, [cli, 'create', 'chip', '--type', 'codex', '--description', description, '--config', dir], { env, timeout: 15000 });
+  await exec(process.execPath, [cli, 'create', 'chip', '--type', 'codex', '--path', 'chip-workdir', '--description', description, '--config', dir], { env, cwd: dir, timeout: 15000 });
   const config = new Config(dir);
   assert.equal(config.getAgent('chip').description, description);
+  assert.equal(config.getAgent('chip').path, path.join(dir, 'chip-workdir'));
   await assert.rejects(() => exec(process.execPath, [cli, 'create', 'bad', '--type', 'codex', '--config', dir, '--description'], { env, timeout: 15000 }));
   assert.equal(config.getAgent('bad'), null);
 });

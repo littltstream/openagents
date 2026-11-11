@@ -27,6 +27,7 @@ const { pinnedFingerprint, sampleRecap } = require('./decision-log');
 const { defaultAgentWorkdir, whichBinary, whereBinary } = require('../paths');
 const { isPostinstallStub } = require('../postinstall-stub');
 const { readToolNames, writeToolNames } = require('../../../agent-collaboration/src');
+const { claudeConfigDir, claudeProjectDir, snapshotTranscript } = require('../host-agent');
 
 const IS_WINDOWS = process.platform === 'win32';
 
@@ -102,10 +103,16 @@ class ClaudeAdapter extends BaseAdapter {
    * @param {object} opts - BaseAdapter opts plus:
    * @param {Set} [opts.disabledModules]
    * @param {string} [opts.workingDir]
+   * @param {{session_id: string, transcript: string}} [opts.seedSession] -
+   *   A Claude Code conversation this agent was created from (`agn join`).
+   *   Each channel's first turn forks it, so the agent starts with what was
+   *   said there without ever writing to it.
    */
   constructor(opts) {
     super(opts);
     this.disabledModules = opts.disabledModules || new Set();
+    this._seedSession = opts.seedSession && opts.seedSession.session_id && opts.seedSession.transcript
+      ? opts.seedSession : null;
     /** @type {'mcp' | 'skills'} Tool integration mode */
     this.toolMode = opts.toolMode || 'skills';
     this._channelSessions = {}; // channel → Claude CLI session_id
@@ -161,7 +168,9 @@ class ClaudeAdapter extends BaseAdapter {
           delete this._channelProcesses[channel];
         }
         if (this._channelSessions[channel]) {
-          delete this._channelSessions[channel];
+          // null, not delete: the channel stays known, so a restart starts
+          // it fresh instead of forking the seed conversation again.
+          this._channelSessions[channel] = null;
           try { this._saveSessions(); } catch {}
           this._log(`Restart: cleared session for channel=${channel}`);
         } else {
@@ -508,17 +517,48 @@ class ClaudeAdapter extends BaseAdapter {
 
     // Resume existing conversation (skipped on retry after stale session)
     const sessionId = this._channelSessions[channelName];
+    let seeded = false;
     if (sessionId && !skipResume) {
       cmd.push('--resume', sessionId);
+    } else if (!skipResume && !Object.prototype.hasOwnProperty.call(this._channelSessions, channelName)) {
+      const seed = this._seedArgs();
+      if (seed) { cmd.push(...seed); seeded = true; }
     }
 
     // ── Skills mode: write SKILL.md, no MCP server ──
     if (this.toolMode === 'skills') {
-      return this._buildSkillsCmd(cmd, channelName);
+      return { ...this._buildSkillsCmd(cmd, channelName), seeded };
     }
 
     // ── MCP mode (default): spawn MCP server ──
-    return this._buildMcpCmd(cmd, channelName);
+    return { ...this._buildMcpCmd(cmd, channelName), seeded };
+  }
+
+  /**
+   * `--resume <seed> --fork-session` for a channel's first turn, or null.
+   * Claude Code resumes only sessions filed under the cwd it runs in, so the
+   * seed's transcript is copied there first (complete lines only: the chat it
+   * came from may still be open and writing). Copied at each use, so a new
+   * channel starts from the conversation as it is now. A transcript that is
+   * gone turns seeding off.
+   */
+  _seedArgs() {
+    const seed = this._seedSession;
+    if (!seed) return null;
+    try {
+      const workDir = this.workingDir || defaultAgentWorkdir(this.agentName);
+      const destDir = claudeProjectDir(claudeConfigDir(this.agentEnv || process.env), workDir);
+      if (path.resolve(path.dirname(seed.transcript)) !== path.resolve(destDir)) {
+        snapshotTranscript(seed.transcript, destDir);
+      } else if (!fs.existsSync(seed.transcript)) {
+        throw new Error('transcript is gone');
+      }
+      return ['--resume', seed.session_id, '--fork-session'];
+    } catch (e) {
+      this._log(`Seed conversation ${seed.session_id} unavailable (${e.message}); new channels start fresh`);
+      this._seedSession = null;
+      return null;
+    }
   }
 
   /**
@@ -749,6 +789,11 @@ class ClaudeAdapter extends BaseAdapter {
    * silent for too long while a message is in flight.  Pauses during
    * tool execution (awaitingToolResult) since long-running commands
    * like builds or sleep produce no stdout legitimately.
+   *
+   * It only stops the process. What the channel is told depends on what
+   * happens next, so the caller says it (see _silenceNotice): it used to post
+   * "became unresponsive and was restarted" itself, and the caller then also
+   * posted "No response generated (exit code unknown)".
    */
   _startWatchdog(pp) {
     this._stopWatchdog(pp);
@@ -774,21 +819,49 @@ class ClaudeAdapter extends BaseAdapter {
         this._log(`Watchdog: process unresponsive for ${consecutiveTimeouts * 15}s on ${pp.msgChannel} — killing`);
         if (tail) this._log(`stderr: ${tail}`);
         this._stopWatchdog(pp);
-        try {
-          await this.sendError(
-            pp.msgChannel,
-            'Agent process became unresponsive and was restarted.' +
-              (tail ? `\n\n\`\`\`\n${tail}\n\`\`\`` : ''),
-          );
-        } catch {}
         if (pp.messageResolve) {
           const resolve = pp.messageResolve;
           pp.messageResolve = null;
-          resolve({ exited: true, error: new Error('watchdog timeout') });
+          resolve({ exited: true, watchdog: true, stderrTail: tail, error: new Error('watchdog timeout') });
         }
         this._killPersistentProc(pp.msgChannel);
       }
     }, this._WATCHDOG_INTERVAL_MS);
+  }
+
+  /** How long the watchdog waits, in whole minutes, for the channel. */
+  _watchdogMinutes() {
+    return Math.max(1, Math.round((this._WATCHDOG_INTERVAL_MS * this._WATCHDOG_MAX_TIMEOUTS) / 60_000));
+  }
+
+  /**
+   * What the channel reads when the watchdog stopped a turn for good.
+   *
+   * Tool runs pause the watchdog, so silence this long is Claude waiting on
+   * the model. That is almost always the API or the relay not answering, and
+   * the user can check that; "the agent process became unresponsive" sent
+   * them looking at the agent instead.
+   */
+  _silenceNotice(stderrTail) {
+    return `Claude produced no output for ${this._watchdogMinutes()} minutes, so this turn was stopped. ` +
+      'This usually means the model API (or the relay this agent uses) is not responding. ' +
+      'Check it, then send the message again.' +
+      (stderrTail ? `\n\n\`\`\`\n${stderrTail}\n\`\`\`` : '');
+  }
+
+  /**
+   * A status line for Claude Code's own `api_retry` event, or '' when it
+   * carries nothing to show. Without it the channel saw nothing at all while
+   * the CLI retried a failing request for minutes.
+   */
+  _apiRetryStatus(event) {
+    const attempt = Number(event && event.attempt);
+    if (!attempt) return '';
+    const max = Number(event.max_retries);
+    const why = event.error_status
+      ? `HTTP ${event.error_status}`
+      : this._redact(String(event.error || '')).slice(0, 60).trim();
+    return `Claude's API request failed${why ? ` (${why})` : ''}, retrying (${max ? `${attempt}/${max}` : attempt})…`;
   }
 
   _stopWatchdog(pp) {
@@ -978,6 +1051,11 @@ class ClaudeAdapter extends BaseAdapter {
           pp.backgroundTasks = Array.isArray(event.tasks) ? event.tasks.length : 0;
           return;
         }
+        if (subtype === 'api_retry') {
+          const status = this._apiRetryStatus(event);
+          if (status) { try { await this.sendStatus(pp.msgChannel, status); } catch {} }
+          return;
+        }
         if (subtype.includes('compact') || String(message).toLowerCase().includes('compact')) {
           await this.sendStatus(pp.msgChannel, String(message) || 'Compacting conversation...');
         }
@@ -1145,7 +1223,7 @@ class ClaudeAdapter extends BaseAdapter {
    */
   async _resetSessionForPromptTooLong(msgChannel) {
     this._log('Prompt too long, clearing session and retrying');
-    delete this._channelSessions[msgChannel];
+    this._channelSessions[msgChannel] = null;
     this._saveSessions();
     await this._killPersistentProc(msgChannel);
     try {
@@ -1404,12 +1482,24 @@ class ClaudeAdapter extends BaseAdapter {
         } else {
           // Process died mid-message — fall through to spawn a fresh one
           this._log(`Persistent process died, falling back to fresh spawn for ${msgChannel}`);
+          if (result.watchdog) {
+            // A long-lived process can wedge on its own, so one restart is
+            // worth it. If the fresh one goes silent too, the spawn path below
+            // stops and says why.
+            try {
+              await this.sendStatus(
+                msgChannel,
+                `Claude produced no output for ${this._watchdogMinutes()} minutes. Restarting it and sending your message again.`,
+              );
+            } catch {}
+          }
         }
       }
     }
 
     let mcpConfigFile = null;
     let cmd;
+    let seeded = false;
 
     const cleanEnv = ClaudeAdapter._buildChildEnv(this.agentEnv || process.env);
 
@@ -1448,6 +1538,7 @@ class ClaudeAdapter extends BaseAdapter {
         });
         cmd = built.cmd;
         mcpConfigFile = built.mcpConfigFile;
+        seeded = !!built.seeded;
       } catch (e) {
         await this.sendError(msgChannel, e.message);
         return;
@@ -1466,7 +1557,7 @@ class ClaudeAdapter extends BaseAdapter {
         ]);
         pp.spawnMode = this._mode;
         pp.spawnModel = this.workspaceModel || null;
-        const resumed = attempt === 0 && !!this._channelSessions[msgChannel];
+        const resumed = attempt === 0 && (!!this._channelSessions[msgChannel] || seeded);
         this._log(`Spawned persistent process for ${msgChannel} (attempt ${attempt + 1})`);
 
         let result = await this._sendToPersistentProc(pp, effectiveContent);
@@ -1490,6 +1581,13 @@ class ClaudeAdapter extends BaseAdapter {
 
         if (result.exited) {
           this._log(`Process exited during first message (attempt ${attempt + 1})`);
+          if (result.watchdog) {
+            // Silence is not a session that failed to resume. Retrying without
+            // it threw the session away, posted "could not be resumed", and
+            // waited out the same silence again.
+            try { await this.sendError(msgChannel, this._silenceNotice(result.stderrTail)); } catch {}
+            break;
+          }
           if (attempt === 0 && this._channelSessions[msgChannel]) {
             this._log(`Stale session detected, retrying without resume`);
             delete this._channelSessions[msgChannel];
@@ -1550,15 +1648,19 @@ class ClaudeAdapter extends BaseAdapter {
 
 /**
  * @anthropic-ai/claude-code ships a placeholder where its native binary goes
- * and swaps the real one in from a postinstall script. With that script
- * skipped (`ignore-scripts=true` in an npmrc, pnpm, bun) the placeholder is
- * what runs: shell text on macOS/Linux, and on Windows a `claude.exe` the OS
- * will not start (spawn EFTYPE).
+ * and swaps the real one in from a postinstall script, copied out of a
+ * per-platform optional dependency. Skip that script (`ignore-scripts=true` in
+ * an npmrc, pnpm, bun) or lose that dependency (npm drops one whose download
+ * fails, or under omit=optional) and the placeholder is what runs: shell text
+ * on macOS/Linux, and on Windows a `claude.exe` the OS will not start (spawn
+ * EFTYPE). Which of the two happened is the installer's to find out; a
+ * reinstall from the launcher handles both (installer.finishNpmInstall).
  */
-ClaudeAdapter.INSTALL_INCOMPLETE = 'Claude Code is installed, but its setup never finished: the '
-  + '@anthropic-ai/claude-code package\'s postinstall script did not run (npm `ignore-scripts`, or a '
-  + 'pnpm/bun install), so the `claude` command is only a placeholder. Reinstall Claude Code from the '
-  + 'launcher — or, for a copy you installed yourself, run '
-  + '`npm install -g @anthropic-ai/claude-code --ignore-scripts=false` — then retry.';
+ClaudeAdapter.INSTALL_INCOMPLETE = 'Claude Code is installed, but its setup never finished, so the '
+  + '`claude` command is only a placeholder: either the @anthropic-ai/claude-code package\'s postinstall '
+  + 'script did not run (npm `ignore-scripts`, or a pnpm/bun install), or npm left out the per-platform '
+  + 'package that holds the native binary (its download failed, or optional dependencies are turned off). '
+  + 'Reinstall Claude Code from the launcher — or, for a copy you installed yourself, run '
+  + '`npm install -g @anthropic-ai/claude-code --ignore-scripts=false --include=optional` — then retry.';
 
 module.exports = ClaudeAdapter;
