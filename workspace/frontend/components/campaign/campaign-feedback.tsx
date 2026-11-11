@@ -1,4 +1,6 @@
 'use client';
+import { scopedLocalStorage } from '@/lib/scoped-storage';
+
 
 /**
  * In-workspace feedback for the API credits campaign.
@@ -37,7 +39,7 @@ const POLL_MS = 45_000;
 
 function loadSeen(): Set<string> {
   try {
-    return new Set(JSON.parse(localStorage.getItem(SEEN_KEY) || '[]'));
+    return new Set(JSON.parse(scopedLocalStorage.getItem(SEEN_KEY) || '[]'));
   } catch {
     return new Set();
   }
@@ -71,12 +73,12 @@ export function CampaignMilestoneToasts({ idToken }: { idToken: string }) {
 
         // First observation ever (no stored baseline): record without
         // toasting, so returning users aren't spammed with history.
-        const firstRun = seenRef.current === null && localStorage.getItem(SEEN_KEY) === null;
+        const firstRun = seenRef.current === null && scopedLocalStorage.getItem(SEEN_KEY) === null;
         const seen = seenRef.current ?? loadSeen();
         const fresh = granted.filter((g) => !seen.has(g.key));
         granted.forEach((g) => seen.add(g.key));
         seenRef.current = seen;
-        localStorage.setItem(SEEN_KEY, JSON.stringify(Array.from(seen)));
+        scopedLocalStorage.setItem(SEEN_KEY, JSON.stringify(Array.from(seen)));
 
         if (!firstRun) {
           const tr = tRef.current;

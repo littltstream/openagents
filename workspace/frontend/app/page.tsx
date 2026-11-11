@@ -1,4 +1,8 @@
 'use client';
+import { scopedSessionStorage } from '@/lib/scoped-storage';
+
+import { appPath } from '@/lib/app-path';
+
 
 import { desktopHost } from '@/lib/desktop-host';
 import { allowsOidcRegistration, usesInlineLogin, usesOidcLogin } from '@/lib/auth-mode';
@@ -73,8 +77,8 @@ function LandingPage() {
       <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-sm">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <Image src="/logo-icon.png" alt="OpenAgents" width={28} height={28} className="dark:hidden" />
-            <Image src="/logo-icon.png" alt="OpenAgents" width={28} height={28} className="hidden dark:block" />
+            <Image src={appPath('/logo-icon.png')} alt="OpenAgents" width={28} height={28} className="dark:hidden" />
+            <Image src={appPath('/logo-icon.png')} alt="OpenAgents" width={28} height={28} className="hidden dark:block" />
             <span className="font-semibold text-lg">OpenAgents</span>
           </div>
           <div className="flex items-center gap-3">
@@ -303,7 +307,7 @@ function LandingPage() {
       <footer className="border-t py-8">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
           <div className="flex items-center gap-2">
-            <Image src="/logo-icon.png" alt="OpenAgents" width={20} height={20} />
+            <Image src={appPath('/logo-icon.png')} alt="OpenAgents" width={20} height={20} />
             <span>OpenAgents</span>
           </div>
           <div className="flex items-center gap-4">
@@ -839,7 +843,7 @@ function MembershipHome({
     !usesOidcLogin() &&
     !!firstWorkspace &&
     typeof window !== 'undefined' &&
-    sessionStorage.getItem('oa_auto_entered_first_ws') !== '1';
+    scopedSessionStorage.getItem('oa_auto_entered_first_ws') !== '1';
   const autoEnteredRef = useRef(false);
   // Re-renders once the redirect is out, so willAutoEnter (now false) stops
   // holding the skeleton. In the desktop app the push opens the workspace in
@@ -849,7 +853,7 @@ function MembershipHome({
   useEffect(() => {
     if (!willAutoEnter || !firstWorkspace || autoEnteredRef.current) return;
     autoEnteredRef.current = true;
-    sessionStorage.setItem('oa_auto_entered_first_ws', '1');
+    scopedSessionStorage.setItem('oa_auto_entered_first_ws', '1');
     capture('first_workspace_auto_entered', { workspace_id: firstWorkspace.slug });
     router.push(`/${firstWorkspace.slug}`);
     if (desktopHost()) {
@@ -904,7 +908,7 @@ function MembershipHome({
               className="flex items-center gap-2.5 rounded-md transition-transform hover:-translate-y-0.5 focus:outline-none"
               title={t('dashboard.backToHome')}
             >
-              <Image src="/logo-icon.png" alt="OpenAgents" width={26} height={26} />
+              <Image src={appPath('/logo-icon.png')} alt="OpenAgents" width={26} height={26} />
               <span className="text-lg font-extrabold tracking-tight">OpenAgents</span>
             </a>
             <div className="flex items-center gap-3">
@@ -1053,13 +1057,13 @@ function SignInGate({ signIn }: { signIn: () => Promise<void> }) {
     }
     // If we bounced to central login recently and are back here still logged
     // out, the round-trip failed — stop looping and offer inline sign-in.
-    const last = Number(sessionStorage.getItem(LOGIN_BOUNCE_KEY) || 0);
+    const last = Number(scopedSessionStorage.getItem(LOGIN_BOUNCE_KEY) || 0);
     if (last && Date.now() - last < 60_000) {
-      sessionStorage.removeItem(LOGIN_BOUNCE_KEY);
+      scopedSessionStorage.removeItem(LOGIN_BOUNCE_KEY);
       setShowInline(true);
       return;
     }
-    sessionStorage.setItem(LOGIN_BOUNCE_KEY, String(Date.now()));
+    scopedSessionStorage.setItem(LOGIN_BOUNCE_KEY, String(Date.now()));
     const returnTo = encodeURIComponent(window.location.href);
     window.location.replace(`https://openagents.org/login?returnTo=${returnTo}`);
   }, [isLocal]);
@@ -1072,7 +1076,7 @@ function SignInGate({ signIn }: { signIn: () => Promise<void> }) {
       style={{ background: PAGE_BG }}
     >
       <div className="flex flex-col items-center gap-3">
-        <Image src="/logo-icon.png" alt="OpenAgents" width={44} height={44} />
+        <Image src={appPath('/logo-icon.png')} alt="OpenAgents" width={44} height={44} />
         <h1 className="text-2xl font-black tracking-tight">{t('auth.signInTitle')}</h1>
         <p className="text-neutral-600 text-sm text-center max-w-md">
           {t('auth.signInBody')}

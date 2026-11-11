@@ -1,4 +1,6 @@
 'use client';
+import { appPath } from '@/lib/app-path';
+
 
 import { Fragment, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import { useT, type MessageKey, type TranslateFn } from '@/lib/i18n';
@@ -366,7 +368,7 @@ function NavRail({ onlineCount, expanded = true, height }: { onlineCount: number
   return (
     <div className="flex h-full shrink-0 flex-col py-2" style={{ width: expanded ? 180 : 52, borderRight: `1px solid ${BORDER}`, background: 'rgba(244,244,245,0.6)', height }}>
       <div className={`flex items-center gap-2 px-3 pb-2 ${expanded ? '' : 'justify-center px-0'}`}>
-        <img src="/images/oa-logo-black.png" alt="" className="size-7 shrink-0" />
+        <img src={appPath('/images/oa-logo-black.png')} alt="" className="size-7 shrink-0" />
         {expanded && <span className="truncate text-[13px] font-semibold" style={{ color: TXT }}>acme-team</span>}
       </div>
       <div className="px-2 space-y-0.5">
@@ -574,7 +576,7 @@ function Scene2_Title({ localMs }: { localMs: number }) {
     <div className="h-full relative overflow-hidden" style={{ background: '#fff' }}>
       <div className="h-full flex flex-col items-center justify-center">
         <Stamp show={localMs >= 120}>
-          <img src="/images/oa-logo-black.png" alt="" className="w-16 h-16 mx-auto mb-6"
+          <img src={appPath('/images/oa-logo-black.png')} alt="" className="w-16 h-16 mx-auto mb-6"
             style={{ animation: localMs >= 120 ? `logo-in 0.7s ${EASE} backwards` : undefined }} />
         </Stamp>
         <Stamp show={localMs >= 280}>
@@ -657,7 +659,7 @@ function Scene3_Hub({ localMs }: { localMs: number }) {
               <span>5G</span>
             </div>
             <div className="flex items-center gap-1.5 px-3 pt-2 pb-1.5" style={{ borderBottom: `1px solid ${BORDER}` }}>
-              <img src="/images/oa-logo-black.png" alt="" className="size-4" />
+              <img src={appPath('/images/oa-logo-black.png')} alt="" className="size-4" />
               <span className="text-[11px] font-semibold" style={{ color: TXT }}>acme-team</span>
               <span className="ml-auto text-[9px]" style={{ color: GREEN }}>● {onlineCount}/5</span>
             </div>
@@ -1990,7 +1992,7 @@ function Scene6_Anywhere({ localMs }: { localMs: number }) {
             </div>
             {/* workspace header */}
             <div className="flex items-center gap-2 px-4 pt-3 pb-2" style={{ borderBottom: `1px solid ${BORDER}` }}>
-              <img src="/images/oa-logo-black.png" alt="" className="size-6" />
+              <img src={appPath('/images/oa-logo-black.png')} alt="" className="size-6" />
               <span className="text-[14px] font-semibold" style={{ color: TXT }}>acme-team</span>
               <span className="ml-auto text-[10px]" style={{ color: GREEN }}>● {t('welcomeFilm.app.online', { online: 5, total: 5 })}</span>
             </div>
@@ -2065,7 +2067,7 @@ function Scene7_Outro({ localMs }: { localMs: number }) {
     <div className="h-full relative overflow-hidden" style={{ background: HERO_WASH }}>
       <div className="h-full flex flex-col items-center justify-center">
         <Stamp show={localMs >= 150}>
-          <img src="/images/oa-logo-black.png" alt="OpenAgents" className="w-16 h-16 mb-6"
+          <img src={appPath('/images/oa-logo-black.png')} alt="OpenAgents" className="w-16 h-16 mb-6"
             style={{ animation: localMs >= 150 ? `logo-in 0.8s ${EASE} backwards` : undefined }} />
         </Stamp>
         <Stamp show={localMs >= 320}>
@@ -2097,7 +2099,7 @@ function Scene7_Outro({ localMs }: { localMs: number }) {
         </Stamp>
       </div>
       {/* mascot peeks in, like on the website */}
-      <img src="/images/oa-mascot.png" alt="" className="absolute -right-4 -bottom-6 w-44 drop-shadow-xl"
+      <img src={appPath('/images/oa-mascot.png')} alt="" className="absolute -right-4 -bottom-6 w-44 drop-shadow-xl"
         style={{
           transition: `transform 0.7s ${EASE}`,
           transform: localMs >= 1200 ? 'translateY(0) rotate(-6deg)' : 'translateY(220px) rotate(-6deg)',

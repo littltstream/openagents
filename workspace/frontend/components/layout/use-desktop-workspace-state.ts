@@ -1,4 +1,6 @@
 'use client';
+import { scopedLocalStorage } from '@/lib/scoped-storage';
+
 
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
@@ -21,7 +23,7 @@ export function useDesktopWorkspaceState(): void {
   useEffect(() => {
     if (!key || loading || restored === key) return;
     try {
-      const saved = JSON.parse(localStorage.getItem(key) || 'null');
+      const saved = JSON.parse(scopedLocalStorage.getItem(key) || 'null');
       if (new URLSearchParams(window.location.search).has('issue')) openView('issues');
       else if (saved && VIEWS.includes(saved.view)) openView(saved.view);
       if (typeof saved?.thread === 'string' && sessions.some(s => s.sessionId === saved.thread)) {
@@ -33,7 +35,7 @@ export function useDesktopWorkspaceState(): void {
 
   useEffect(() => {
     if (!key || loading || restored !== key) return;
-    try { localStorage.setItem(key, JSON.stringify({ view: viewMode, thread: currentSessionId })); }
+    try { scopedLocalStorage.setItem(key, JSON.stringify({ view: viewMode, thread: currentSessionId })); }
     catch { /* Optional preference. */ }
   }, [key, loading, restored, viewMode, currentSessionId]);
 }

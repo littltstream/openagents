@@ -1,3 +1,4 @@
+import { scopedLocalStorage } from '@/lib/scoped-storage';
 import { getApiBaseUrl } from '@/lib/api-base';
 // Workspace-issued login session — the Google-free path into the workspace.
 //
@@ -44,7 +45,7 @@ export async function exchangeHandoffToken(customToken: string): Promise<Workspa
 
 export function saveWorkspaceSession(session: WorkspaceSession): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    scopedLocalStorage.setItem(STORAGE_KEY, JSON.stringify(session));
   } catch {
     /* storage unavailable (private mode quota) — session lives for this page only */
   }
@@ -53,7 +54,7 @@ export function saveWorkspaceSession(session: WorkspaceSession): void {
 /** The stored session, or null if absent, malformed, or within a minute of expiry. */
 export function loadWorkspaceSession(): WorkspaceSession | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = scopedLocalStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const s = JSON.parse(raw) as WorkspaceSession;
     if (!s?.token || !s?.email || typeof s.expiresAt !== 'number') {
@@ -72,7 +73,7 @@ export function loadWorkspaceSession(): WorkspaceSession | null {
 
 export function clearWorkspaceSession(): void {
   try {
-    localStorage.removeItem(STORAGE_KEY);
+    scopedLocalStorage.removeItem(STORAGE_KEY);
   } catch {
     /* ignore */
   }

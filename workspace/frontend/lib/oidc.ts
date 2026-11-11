@@ -1,5 +1,6 @@
 import type Keycloak from 'keycloak-js';
 import { getApiBaseUrl } from './api-base';
+import { appPath } from './app-path';
 
 let clientPromise: Promise<Keycloak> | undefined;
 
@@ -63,5 +64,5 @@ export async function changePasswordWithOidc(): Promise<void> {
 
 export async function signOutWithOidc(): Promise<void> {
   const client = await getOidcClient();
-  await client.logout({ redirectUri: window.location.origin + '/login' });
+  await client.logout({ redirectUri: window.location.origin + appPath('/login') });
 }

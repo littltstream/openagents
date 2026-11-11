@@ -1,4 +1,6 @@
 'use client';
+import { appPath } from '@/lib/app-path';
+
 import { threadPath } from '@/lib/thread-link';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -165,7 +167,7 @@ export default function ApprovalsSettingsPage() {
                     onClick={async () => {
                       try {
                         const link = await workspaceApi.getThreadLink(a.channelName);
-                        window.location.assign(`${threadPath(workspaceId, link.id)}${query}`);
+                        window.location.assign(appPath(`${threadPath(workspaceId, link.id)}${query}`));
                       } catch { toast.error(t('share.threadUnavailable')); }
                     }}
                     className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"

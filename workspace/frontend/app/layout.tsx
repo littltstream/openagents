@@ -1,3 +1,5 @@
+import { scopedStorageKey } from '@/lib/scoped-storage';
+import { appPath } from '@/lib/app-path';
 import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import Script from 'next/script';
@@ -35,13 +37,13 @@ export async function generateMetadata(): Promise<Metadata> {
 const staticMetadata: Metadata = {
   icons: {
     icon: [
-      { url: '/favicon.ico', sizes: 'any' },
-      { url: '/favicon-16x16.png', sizes: '16x16', type: 'image/png' },
-      { url: '/favicon-32x32.png', sizes: '32x32', type: 'image/png' },
+      { url: appPath('/favicon.ico'), sizes: 'any' },
+      { url: appPath('/favicon-16x16.png'), sizes: '16x16', type: 'image/png' },
+      { url: appPath('/favicon-32x32.png'), sizes: '32x32', type: 'image/png' },
     ],
-    apple: '/apple-touch-icon.png',
+    apple: appPath('/apple-touch-icon.png'),
   },
-  manifest: '/site.webmanifest',
+  manifest: appPath('/site.webmanifest'),
 };
 
 export const viewport: Viewport = {
@@ -89,7 +91,7 @@ export default async function RootLayout({
         className={`${inter.className} bg-zinc-100 dark:bg-zinc-900`}
         suppressHydrationWarning
       >
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+        <ThemeProvider storageKey={scopedStorageKey("theme")} attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <I18nProvider initialLocale={locale} hasStoredLocale={hasStoredLocale}>
             <MaintenanceBanner />
             {/* Legacy email/password AuthProvider was removed in v1.0 —

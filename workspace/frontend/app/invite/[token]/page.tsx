@@ -1,4 +1,8 @@
 'use client';
+import { scopedSessionStorage } from '@/lib/scoped-storage';
+
+import { appPath } from '@/lib/app-path';
+
 
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -56,8 +60,8 @@ export default function InvitePage({ params }: { params: Promise<{ token: string
     // Clicking “Sign in to accept” already expressed intent to join. Resume
     // only that invitation after the login round trip, once per attempt.
     try {
-      if (sessionStorage.getItem('oa-accept-invite') !== token) return;
-      sessionStorage.removeItem('oa-accept-invite');
+      if (scopedSessionStorage.getItem('oa-accept-invite') !== token) return;
+      scopedSessionStorage.removeItem('oa-accept-invite');
     } catch { return; }
     autoJoinAttempted.current = true;
     void join();
@@ -66,8 +70,8 @@ export default function InvitePage({ params }: { params: Promise<{ token: string
   const card = (children: React.ReactNode) => (
     <div className="flex min-h-screen items-center justify-center bg-background p-6">
       <div className="w-full max-w-md space-y-5 rounded-2xl border bg-card p-8 text-center shadow-sm">
-        <img src="/logo-icon.png" alt="OpenAgents" className="mx-auto size-12 dark:hidden" />
-        <img src="/logo-white.png" alt="OpenAgents" className="mx-auto hidden size-12 dark:block" />
+        <img src={appPath('/logo-icon.png')} alt="OpenAgents" className="mx-auto size-12 dark:hidden" />
+        <img src={appPath('/logo-white.png')} alt="OpenAgents" className="mx-auto hidden size-12 dark:block" />
         {children}
       </div>
     </div>
@@ -152,7 +156,7 @@ export default function InvitePage({ params }: { params: Promise<{ token: string
         <div className="space-y-3">
           {/* goToCentralLogin round-trips back to this invite URL. */}
           <Button className="w-full" onClick={() => {
-            try { sessionStorage.setItem('oa-accept-invite', token); } catch { /* Join button remains available after login. */ }
+            try { scopedSessionStorage.setItem('oa-accept-invite', token); } catch { /* Join button remains available after login. */ }
             goToCentralLogin(undefined, { forceCentral: true });
           }}>
             <LogIn className="size-4" />

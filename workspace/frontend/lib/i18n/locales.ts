@@ -1,3 +1,4 @@
+import { scopedCookieName } from '@/lib/scoped-storage';
 /**
  * Locale definitions, matching, and region detection.
  *
@@ -19,7 +20,7 @@ export type Locale = (typeof LOCALES)[number];
 export const DEFAULT_LOCALE: Locale = 'en-US';
 
 /** Cookie holding the resolved locale. Read server-side on every request. */
-export const LOCALE_COOKIE = 'oa_locale';
+export const LOCALE_COOKIE = scopedCookieName('oa_locale');
 
 /** One year — the choice should survive well past a session. */
 export const LOCALE_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;

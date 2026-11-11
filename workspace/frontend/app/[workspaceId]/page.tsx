@@ -1,4 +1,8 @@
 'use client';
+import { scopedCookieName } from '@/lib/scoped-storage';
+
+import { appPath } from '@/lib/app-path';
+
 
 import { getApiBaseUrl } from '@/lib/api-base';
 
@@ -20,12 +24,12 @@ function WorkspaceLoadingSplash() {
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background">
       <div className="flex flex-col items-center gap-5">
         <img
-          src="/logo-icon.png"
+          src={appPath('/logo-icon.png')}
           alt="OpenAgents"
           className="size-16 animate-[pulse_2s_ease-in-out_infinite] dark:hidden"
         />
         <img
-          src="/logo-white.png"
+          src={appPath('/logo-white.png')}
           alt="OpenAgents"
           className="size-16 animate-[pulse_2s_ease-in-out_infinite] hidden dark:block"
         />
@@ -61,9 +65,9 @@ function workspaceCookieDomain(hostname: string): string {
 function setWorkspaceCookie(slug: string, token: string) {
   const maxAge = 30 * 24 * 60 * 60;
   const domain = workspaceCookieDomain(window.location.hostname);
-  const shared = `path=/;max-age=${maxAge};secure;samesite=lax${domain}`;
-  document.cookie = `oa_workspace=${encodeURIComponent(JSON.stringify({ slug, token }))};${shared}`;
-  document.cookie = `oa_has_workspace=1;${shared}`;
+  const shared = `path=${appPath('/')};max-age=${maxAge};secure;samesite=lax${domain}`;
+  document.cookie = `${scopedCookieName('oa_workspace')}=${encodeURIComponent(JSON.stringify({ slug, token }))};${shared}`;
+  document.cookie = `${scopedCookieName('oa_has_workspace')}=1;${shared}`;
 }
 
 function IdentityGate({ children }: { children: React.ReactNode }) {
@@ -173,7 +177,7 @@ function BearerWorkspace({ workspaceId, idToken }: { workspaceId: string; idToke
           </button>
         )}
         <a
-          href="/"
+          href={appPath('/')}
           className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
         >
           {t('workspaceGate.goHome')}

@@ -1,0 +1,34 @@
+# Prepared .cn cutover overlay. Use compose-cn.sh; same project and persistent volumes.
+services:
+  keycloak:
+    environment:
+      KC_HOSTNAME: https://auth.chippilot.cn
+      WORKSPACE_WEB_ORIGIN: https://openagents.chippilot.cn
+  backend:
+    environment:
+      OIDC_ISSUER_URL: https://auth.chippilot.cn/realms/openagents
+      OIDC_PASSWORD_RESET_REDIRECT_URI: https://openagents.chippilot.cn/
+      FRONTEND_BASE_URL: https://openagents.chippilot.cn
+      CORS_ORIGINS: https://openagents.chippilot.cn
+  frontend:
+    image: openagents-frontend:chippilot-cn
+    build:
+      args:
+        NEXT_PUBLIC_BASE_PATH: ""
+        NEXT_PUBLIC_API_URL: https://api.chippilot.cn
+        NEXT_PUBLIC_OPENAGENTS_API_URL: https://api.chippilot.cn
+        NEXT_PUBLIC_FIRST_PARTY_HOSTNAMES: openagents.chippilot.cn
+        NEXT_PUBLIC_KEYCLOAK_URL: https://auth.chippilot.cn
+        NEXT_PUBLIC_KEYCLOAK_REALM: openagents
+        NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: openagents-workspace
+        NEXT_PUBLIC_AUTH_MODE: oidc
+        NEXT_PUBLIC_INLINE_LOGIN: "1"
+  domain-proxy:
+    volumes: !override
+      - /home/weizhiyi/openagents-runtime/domain-nginx-cn.conf:/etc/nginx/conf.d/default.conf:ro
+      - /home/weizhiyi/openagents-runtime/domain-tls:/etc/nginx/domain-tls:ro
+  port-proxy:
+    volumes: !override
+      - /home/weizhiyi/openagents-runtime/port-nginx-cn.conf:/etc/nginx/conf.d/default.conf:ro
+      - /home/weizhiyi/openagents-runtime/port-tls:/etc/nginx/port-tls:ro
+      - /home/weizhiyi/openagents-runtime/domain-tls:/etc/nginx/domain-tls:ro

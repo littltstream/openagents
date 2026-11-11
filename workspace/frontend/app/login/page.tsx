@@ -6,6 +6,7 @@ import { useT } from '@/lib/i18n';
 import { Button } from '@/components/ui/button';
 import { allowsOidcRegistration, usesOidcLogin } from '@/lib/auth-mode';
 import { registerWithOidc } from '@/lib/oidc';
+import { loginReturnPath } from '@/lib/app-path';
 
 function Login() {
   const t = useT();
@@ -13,9 +14,8 @@ function Login() {
   const params = useSearchParams();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const target = params.get('returnTo') || '/';
   // Only same-origin application paths may be used as the return destination.
-  const returnTo = target.startsWith('/') && !target.startsWith('//') && !target.includes('\\') && !target.startsWith('/login') ? target : '/';
+  const returnTo = loginReturnPath(params.get('returnTo'));
   useEffect(() => { if (!loading && user && idToken) window.location.replace(returnTo); }, [loading, user, idToken, returnTo]);
   return <main className="flex min-h-screen flex-col items-center justify-center gap-5 bg-background p-8">
     <h1 className="text-xl font-semibold">{t('workspaceGate.signInTitle')}</h1>

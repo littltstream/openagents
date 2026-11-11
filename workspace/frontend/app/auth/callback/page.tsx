@@ -1,4 +1,6 @@
 'use client';
+import { appPath } from '@/lib/app-path';
+
 
 import { useEffect, useState } from 'react';
 
@@ -118,12 +120,12 @@ function AuthCallback() {
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background">
       <div className="flex flex-col items-center gap-5">
         <img
-          src="/logo-icon.png"
+          src={appPath('/logo-icon.png')}
           alt="OpenAgents"
           className="size-16 animate-[pulse_2s_ease-in-out_infinite] dark:hidden"
         />
         <img
-          src="/logo-white.png"
+          src={appPath('/logo-white.png')}
           alt="OpenAgents"
           className="size-16 animate-[pulse_2s_ease-in-out_infinite] hidden dark:block"
         />

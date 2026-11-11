@@ -1,4 +1,6 @@
 'use client';
+import { scopedLocalStorage } from '@/lib/scoped-storage';
+
 
 import { isRoutineSession, isIssueWorkSession } from '@/lib/conversation-list';
 
@@ -367,7 +369,7 @@ export function WorkspaceProvider({
   const [lastReadBySession, setLastReadBySession] = useState<Record<string, number>>(() => {
     if (typeof window === 'undefined') return {};
     try {
-      return JSON.parse(localStorage.getItem(`oa-read-${workspaceId}`) || '{}');
+      return JSON.parse(scopedLocalStorage.getItem(`oa-read-${workspaceId}`) || '{}');
     } catch {
       return {};
     }
@@ -381,7 +383,7 @@ export function WorkspaceProvider({
     lastReadRef.current = next;
     setLastReadBySession(next);
     try {
-      localStorage.setItem(readKey, JSON.stringify(next));
+      scopedLocalStorage.setItem(readKey, JSON.stringify(next));
     } catch { /* storage full */ }
   }, [readKey]);
 
@@ -564,32 +566,32 @@ export function WorkspaceProvider({
   const [notificationSound, _setNotificationSound] = useState(true);
   useEffect(() => {
     try {
-      const stored = localStorage.getItem('oa_notification_sound');
+      const stored = scopedLocalStorage.getItem('oa_notification_sound');
       _setNotificationSound(stored !== 'false');
     } catch {}
   }, []);
   const setNotificationSound = useCallback((enabled: boolean) => {
     _setNotificationSound(enabled);
-    try { localStorage.setItem('oa_notification_sound', String(enabled)); } catch {}
+    try { scopedLocalStorage.setItem('oa_notification_sound', String(enabled)); } catch {}
   }, []);
 
   // DM / mention sound — on unless the user turned it off (stored 'false').
   const [signalSound, _setSignalSound] = useState(true);
   useEffect(() => {
     try {
-      if (localStorage.getItem(SIGNAL_SOUND_KEY) === 'false') _setSignalSound(false);
+      if (scopedLocalStorage.getItem(SIGNAL_SOUND_KEY) === 'false') _setSignalSound(false);
     } catch {}
   }, []);
   const setSignalSound = useCallback((enabled: boolean) => {
     _setSignalSound(enabled);
-    try { localStorage.setItem(SIGNAL_SOUND_KEY, String(enabled)); } catch {}
+    try { scopedLocalStorage.setItem(SIGNAL_SOUND_KEY, String(enabled)); } catch {}
   }, []);
 
   useEffect(() => {
     const sync = () => {
       try {
-        _setNotificationSound(localStorage.getItem('oa_notification_sound') !== 'false');
-        _setSignalSound(localStorage.getItem(SIGNAL_SOUND_KEY) !== 'false');
+        _setNotificationSound(scopedLocalStorage.getItem('oa_notification_sound') !== 'false');
+        _setSignalSound(scopedLocalStorage.getItem(SIGNAL_SOUND_KEY) !== 'false');
       } catch {}
     };
     window.addEventListener('storage', sync);
@@ -1612,7 +1614,7 @@ export function WorkspaceProvider({
         // Seed previews from localStorage for instant display
         const cacheKey = `previews:${workspaceId}`;
         try {
-          const cached = localStorage.getItem(cacheKey);
+          const cached = scopedLocalStorage.getItem(cacheKey);
           if (cached && !cancelled) {
             setLastMessageBySession((prev) => ({ ...JSON.parse(cached), ...prev }));
           }
@@ -1656,7 +1658,7 @@ export function WorkspaceProvider({
           }
           setLastMessageBySession((prev) => ({ ...prev, ...batch }));
           try {
-            localStorage.setItem(cacheKey, JSON.stringify(batch));
+            scopedLocalStorage.setItem(cacheKey, JSON.stringify(batch));
           } catch { /* storage full */ }
         });
       };
@@ -1855,7 +1857,7 @@ export function WorkspaceProvider({
   useEffect(() => {
     if (Object.keys(lastMessageBySession).length === 0) return;
     try {
-      localStorage.setItem(`previews:${workspaceId}`, JSON.stringify(lastMessageBySession));
+      scopedLocalStorage.setItem(`previews:${workspaceId}`, JSON.stringify(lastMessageBySession));
     } catch { /* storage full */ }
   }, [lastMessageBySession, workspaceId]);
 

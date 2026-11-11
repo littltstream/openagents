@@ -1,4 +1,10 @@
 'use client';
+import { scopedCookieName } from '@/lib/scoped-storage';
+
+import { appPath } from '@/lib/app-path';
+
+import { scopedLocalStorage } from '@/lib/scoped-storage';
+
 
 import {
   createContext,
@@ -67,7 +73,7 @@ export const VIEWS_WITH_LIST: ReadonlySet<ViewMode> = new Set<ViewMode>([
  * and is readable during SSR. Keyed by view because the habit differs per
  * surface — you might keep the thread list open but read files full-width.
  */
-const LIST_PREFS_COOKIE = 'oa-list-open';
+const LIST_PREFS_COOKIE = scopedCookieName('oa-list-open');
 const LIST_PREFS_MAX_AGE = 60 * 60 * 24 * 365;
 
 type ListPrefs = Partial<Record<ViewMode, boolean>>;
@@ -86,14 +92,14 @@ function readListPrefs(): ListPrefs {
 function writeListPrefs(prefs: ListPrefs) {
   if (typeof document === 'undefined') return;
   const value = encodeURIComponent(JSON.stringify(prefs));
-  document.cookie = `${LIST_PREFS_COOKIE}=${value}; path=/; max-age=${LIST_PREFS_MAX_AGE}; samesite=lax`;
+  document.cookie = `${LIST_PREFS_COOKIE}=${value}; path=${appPath('/')}; max-age=${LIST_PREFS_MAX_AGE}; samesite=lax`;
 }
 
 /**
  * Whether the icon rail is expanded to show labels. Persisted the same way as
  * the list preference so the shell comes back the way it was left.
  */
-const RAIL_COOKIE = 'oa-rail-expanded';
+const RAIL_COOKIE = scopedCookieName('oa-rail-expanded');
 
 function readRailPref(): boolean {
   if (typeof document === 'undefined') return false;
@@ -103,7 +109,7 @@ function readRailPref(): boolean {
 
 function writeRailPref(expanded: boolean) {
   if (typeof document === 'undefined') return;
-  document.cookie = `${RAIL_COOKIE}=${expanded ? '1' : '0'}; path=/; max-age=${LIST_PREFS_MAX_AGE}; samesite=lax`;
+  document.cookie = `${RAIL_COOKIE}=${expanded ? '1' : '0'}; path=${appPath('/')}; max-age=${LIST_PREFS_MAX_AGE}; samesite=lax`;
 }
 
 /**
@@ -224,12 +230,12 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
   }, []);
   const [splitBrowser, setSplitBrowser] = useState(() => {
     if (typeof window === 'undefined') return false;
-    return localStorage.getItem('x-split-browser') === '1';
+    return scopedLocalStorage.getItem('x-split-browser') === '1';
   });
 
   const handleSetSplitBrowser = (v: boolean) => {
     setSplitBrowser(v);
-    localStorage.setItem('x-split-browser', v ? '1' : '0');
+    scopedLocalStorage.setItem('x-split-browser', v ? '1' : '0');
   };
 
   const [isRailExpanded, setIsRailExpanded] = useState(false);

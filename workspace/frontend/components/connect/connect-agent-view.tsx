@@ -1,4 +1,8 @@
 'use client';
+import { scopedLocalStorage } from '@/lib/scoped-storage';
+
+import { appPath } from '@/lib/app-path';
+
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { X, Copy, Check, ExternalLink, Loader2, Terminal, Cloud, Trash2, MessageSquare, Image as ImageIcon, Volume2, Key, ChevronRight, Server, Laptop, Monitor, RefreshCw, RotateCcw, Plus, HardDrive, Pencil, Folder, CornerLeftUp, Download, Sparkles, Search, ArrowRight, CheckCircle2, Zap, AlertTriangle, Mail } from 'lucide-react';
@@ -2228,7 +2232,7 @@ function CloudAgentsTab({
       {showBuiltinCard && (
         <div className="flex items-center gap-3 px-3.5 py-3 rounded-lg border border-primary/30 bg-primary/5">
           <img
-            src="/yumi-avatar.png"
+            src={appPath('/yumi-avatar.png')}
             alt="Yumi"
             className="size-9 shrink-0 rounded-md object-cover"
             draggable={false}
@@ -2342,7 +2346,7 @@ export function FirstRunOnboarding({ onDismiss }: { onDismiss?: () => void } = {
   const { idToken: welcomeIdToken } = useOpenAgentsAuth();
   const [alt, setAlt] = useState<'local' | 'cloud' | null>(null);
   const [welcomeDone, setWelcomeDone] = useState(
-    () => typeof window === 'undefined' || localStorage.getItem(WELCOME_FILM_SEEN_KEY) === '1',
+    () => typeof window === 'undefined' || scopedLocalStorage.getItem(WELCOME_FILM_SEEN_KEY) === '1',
   );
 
   useEffect(() => {
@@ -2358,7 +2362,7 @@ export function FirstRunOnboarding({ onDismiss }: { onDismiss?: () => void } = {
     getAccountProfile(welcomeIdToken)
       .then((p) => {
         if (cancelled || !p.welcomeSeen) return;
-        try { localStorage.setItem(WELCOME_FILM_SEEN_KEY, '1'); } catch { /* private mode */ }
+        try { scopedLocalStorage.setItem(WELCOME_FILM_SEEN_KEY, '1'); } catch { /* private mode */ }
         setWelcomeDone(true);
       })
       .catch(() => { /* offline/legacy backend — browser flag still applies */ });
@@ -2367,7 +2371,7 @@ export function FirstRunOnboarding({ onDismiss }: { onDismiss?: () => void } = {
   }, [welcomeIdToken]);
 
   const finishWelcome = useCallback((skipped: boolean) => {
-    try { localStorage.setItem(WELCOME_FILM_SEEN_KEY, '1'); } catch { /* private mode */ }
+    try { scopedLocalStorage.setItem(WELCOME_FILM_SEEN_KEY, '1'); } catch { /* private mode */ }
     if (welcomeIdToken) {
       updateAccountProfile(welcomeIdToken, { welcomeSeen: true }).catch(() => {});
     }

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import smtplib
 import ssl
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -73,6 +73,36 @@ def configure_mailer(api):
     return api('GET', '/clients/' + mailer + '/client-secret').json()['value']
 
 
+def configure_registration_password(api, registration_flow):
+    """Collect the password on the form while keeping email verification required."""
+    if not isinstance(registration_flow, str) or not registration_flow:
+        raise ValueError('The realm must have a registration flow')
+    path = '/authentication/flows/' + quote(registration_flow, safe='') + '/executions'
+    executions = api('GET', path).json()
+    password_steps = [step for step in executions
+                      if step.get('providerId') == 'registration-password-action'
+                      and step.get('requirement') == 'REQUIRED']
+    if len(password_steps) != 1:
+        raise ValueError('Expected exactly one required registration password step')
+    step = password_steps[0]
+    config_id = step.get('authenticationConfig')
+    option = 'always_set_password_on_register_form'
+    if config_id:
+        config_path = '/authentication/config/' + config_id
+        config = api('GET', config_path).json()
+        if config.get('config', {}).get(option) != 'true':
+            config['config'] = {**config.get('config', {}), option: 'true'}
+            api('PUT', config_path, json=config)
+    else:
+        api('POST', '/authentication/executions/' + step['id'] + '/config', json={
+            'alias': 'openagents-registration-password-form', 'config': {option: 'true'},
+        })
+    configured = next(item for item in api('GET', path).json() if item['id'] == step['id'])
+    config_id = configured.get('authenticationConfig')
+    if not config_id or api('GET', '/authentication/config/' + config_id).json().get('config', {}).get(option) != 'true':
+        raise RuntimeError('Keycloak did not retain the registration password policy')
+
+
 def configure(args):
     source = private_text(args.env_file)
     settings = dict(line.split('=', 1) for line in source.splitlines()
@@ -116,6 +146,8 @@ def configure(args):
         if smtp is not None:
             changes['smtpServer'] = smtp
         api('PUT', '', json=changes)
+        if args.enable_registration:
+            configure_registration_password(api, realm.get('registrationFlow'))
         # Remove the previous direct-SSO password override. The application now
         # sends an execute-actions email; a bare AIA cannot overwrite via SSO.
         password_config = api('GET', '/authentication/required-actions/UPDATE_PASSWORD/config').json()

@@ -1,5 +1,6 @@
 import { desktopHost } from './desktop-host';
 import { usesInlineLogin, usesOidcLogin } from './auth-mode';
+import { appPath } from './app-path';
 
 // Central auth redirects for the workspace app.
 //
@@ -66,7 +67,7 @@ export function redirectToLogin(): void {
   if (desktopHost()) { desktopHost()?.signIn(); return; }
   if (isLocalhost() || window.location.hostname === 'workspace-preview.openagents.org') {
     const returnTo = window.location.pathname + window.location.search + window.location.hash;
-    window.location.replace(`/login?returnTo=${encodeURIComponent(returnTo)}`);
+    window.location.replace(`${appPath('/login')}?returnTo=${encodeURIComponent(returnTo)}`);
   } else {
     goToCentralLogin();
   }

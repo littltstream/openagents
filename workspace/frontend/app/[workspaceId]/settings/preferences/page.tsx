@@ -1,4 +1,6 @@
 'use client';
+import { scopedLocalStorage } from '@/lib/scoped-storage';
+
 
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -29,25 +31,25 @@ export default function PreferencesSettingsPage() {
 
   useEffect(() => {
     try {
-      setSound(localStorage.getItem(SOUND_KEY) !== 'false');
-      setSignalSound(localStorage.getItem(SIGNAL_SOUND_KEY) !== 'false');
-      setSplit(localStorage.getItem(SPLIT_KEY) === '1');
+      setSound(scopedLocalStorage.getItem(SOUND_KEY) !== 'false');
+      setSignalSound(scopedLocalStorage.getItem(SIGNAL_SOUND_KEY) !== 'false');
+      setSplit(scopedLocalStorage.getItem(SPLIT_KEY) === '1');
     } catch { /* storage unavailable */ }
   }, []);
 
   const toggleSound = (v: boolean) => {
     setSound(v);
-    try { localStorage.setItem(SOUND_KEY, String(v)); window.dispatchEvent(new Event('workspace-sound-preferences'));  } catch {}
+    try { scopedLocalStorage.setItem(SOUND_KEY, String(v)); window.dispatchEvent(new Event('workspace-sound-preferences'));  } catch {}
   };
 
   const toggleSignalSound = (v: boolean) => {
     setSignalSound(v);
-    try { localStorage.setItem(SIGNAL_SOUND_KEY, String(v)); window.dispatchEvent(new Event('workspace-sound-preferences'));  } catch {}
+    try { scopedLocalStorage.setItem(SIGNAL_SOUND_KEY, String(v)); window.dispatchEvent(new Event('workspace-sound-preferences'));  } catch {}
   };
 
   const toggleSplit = (v: boolean) => {
     setSplit(v);
-    try { localStorage.setItem(SPLIT_KEY, v ? '1' : '0'); } catch {}
+    try { scopedLocalStorage.setItem(SPLIT_KEY, v ? '1' : '0'); } catch {}
   };
 
   return (

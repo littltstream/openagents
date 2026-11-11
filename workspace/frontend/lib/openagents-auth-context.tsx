@@ -1,4 +1,6 @@
 'use client';
+import { scopedSessionStorage } from '@/lib/scoped-storage';
+
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { capture, identify } from './analytics';
@@ -172,8 +174,8 @@ export function OpenAgentsAuthProvider({ children }: { children: React.ReactNode
           // session so restores don't inflate the funnel.
           if (email) {
             identify(email, { email, display_name: firebaseUser.displayName || email });
-            if (!sessionStorage.getItem('oa_sign_in_tracked')) {
-              sessionStorage.setItem('oa_sign_in_tracked', '1');
+            if (!scopedSessionStorage.getItem('oa_sign_in_tracked')) {
+              scopedSessionStorage.setItem('oa_sign_in_tracked', '1');
               const method =
                 firebaseUser.providerData[0]?.providerId?.replace('.com', '') || 'handoff';
               capture('sign_in', { method });

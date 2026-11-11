@@ -1,3 +1,5 @@
+import { appPath } from './app-path';
+
 let context: AudioContext | null = null;
 let buffer: Promise<AudioBuffer> | null = null;
 let lastPlayed = -Infinity;
@@ -7,7 +9,7 @@ export async function prepareNotificationAudio(): Promise<AudioContext> {
   if (!context || context.state === 'closed') context = new AudioContext();
   const audio = context;
   if (audio.state === 'suspended') await audio.resume();
-  buffer ??= fetch('/notification.wav').then(response => {
+  buffer ??= fetch(appPath('/notification.wav')).then(response => {
     if (!response.ok) throw new Error('Notification sound unavailable');
     return response.arrayBuffer();
   }).then(data => audio.decodeAudioData(data)).catch(error => { buffer = null; throw error; });

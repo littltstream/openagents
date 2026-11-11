@@ -1,4 +1,6 @@
 'use client';
+import { appPath } from '@/lib/app-path';
+
 
 import { useEffect, useState } from 'react';
 
@@ -86,12 +88,12 @@ function DesktopAuth() {
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background">
       <div className="flex flex-col items-center gap-5">
         <img
-          src="/logo-icon.png"
+          src={appPath('/logo-icon.png')}
           alt="OpenAgents"
           className={`size-16 dark:hidden ${phase === 'working' ? 'animate-[pulse_2s_ease-in-out_infinite]' : ''}`}
         />
         <img
-          src="/logo-white.png"
+          src={appPath('/logo-white.png')}
           alt="OpenAgents"
           className={`size-16 hidden dark:block ${phase === 'working' ? 'animate-[pulse_2s_ease-in-out_infinite]' : ''}`}
         />

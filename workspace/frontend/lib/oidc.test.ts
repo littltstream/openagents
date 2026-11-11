@@ -66,6 +66,13 @@ it('opens self-registration without losing the return destination', async () => 
   expect(mocks.client.register).toHaveBeenCalledWith({ redirectUri: window.location.href });
 });
 
+it('keeps logout inside an isolated subpath deployment', async () => {
+  vi.stubEnv('NEXT_PUBLIC_BASE_PATH', '/new');
+  const { signOutWithOidc } = await import('./oidc');
+  await signOutWithOidc();
+  expect(mocks.client.logout).toHaveBeenCalledWith({ redirectUri: 'https://workspace.example.test/new/login' });
+});
+
 it('requests an email for the signed-in identity without any caller-supplied recipient', async () => {
   const { changePasswordWithOidc } = await import('./oidc');
   await changePasswordWithOidc();

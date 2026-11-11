@@ -1,4 +1,6 @@
 'use client';
+import { appPath } from '@/lib/app-path';
+
 
 import { useRef, useState } from 'react';
 import Image from 'next/image';
@@ -33,8 +35,8 @@ export function Brand() {
   return (
     <div className="flex items-center gap-2.5 px-2 py-1.5 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
       <span className="relative flex size-8 shrink-0 items-center justify-center overflow-hidden">
-        <Image src="/logo-black.png" alt="" width={32} height={32} className="size-full object-contain dark:hidden" />
-        <Image src="/logo-white.png" alt="" width={32} height={32} className="size-full object-contain hidden dark:block" />
+        <Image src={appPath('/logo-black.png')} alt="" width={32} height={32} className="size-full object-contain dark:hidden" />
+        <Image src={appPath('/logo-white.png')} alt="" width={32} height={32} className="size-full object-contain hidden dark:block" />
       </span>
 
       <div className="grid min-w-0 flex-1 leading-tight group-data-[collapsible=icon]:hidden">

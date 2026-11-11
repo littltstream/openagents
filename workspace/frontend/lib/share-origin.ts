@@ -1,3 +1,5 @@
+import { appBasePath } from './app-path';
+
 const HOSTED_ORIGIN = 'https://workspace.openagents.org';
 
 /**
@@ -16,7 +18,7 @@ export function shareOrigin(): string {
   if (typeof window === 'undefined') return HOSTED_ORIGIN;
   const { protocol, hostname, origin } = window.location;
   const isWeb = protocol === 'https:' || protocol === 'http:';
-  if (isWeb && hostname !== 'localhost') return origin;
+  if (isWeb && hostname !== 'localhost') return origin + appBasePath();
   const desktop = (window as unknown as { __OA_WEB_URL__?: string }).__OA_WEB_URL__;
   return desktop ? desktop.replace(/\/$/, '') : HOSTED_ORIGIN;
 }

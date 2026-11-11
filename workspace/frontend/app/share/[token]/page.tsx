@@ -1,4 +1,6 @@
 'use client';
+import { appPath } from '@/lib/app-path';
+
 
 import { getApiBaseUrl } from '@/lib/api-base';
 
@@ -94,7 +96,7 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
   if (error || !snapshot) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-background gap-4">
-        <Image src="/logo-icon.png" alt="OpenAgents" width={40} height={40} />
+        <Image src={appPath('/logo-icon.png')} alt="OpenAgents" width={40} height={40} />
         <h1 className="text-xl font-semibold">{t('shared.title')}</h1>
         <p className="text-muted-foreground text-sm max-w-md text-center">{error}</p>
         <a
@@ -113,7 +115,7 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
       <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-sm">
         <div className="max-w-3xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <Image src="/logo-icon.png" alt="OpenAgents" width={24} height={24} />
+            <Image src={appPath('/logo-icon.png')} alt="OpenAgents" width={24} height={24} />
             <span className="text-sm font-medium text-muted-foreground">{t('shared.title')}</span>
           </div>
           <a
@@ -150,7 +152,7 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
           href="https://openagents.org"
           className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
         >
-          <Image src="/logo-icon.png" alt="" width={16} height={16} />
+          <Image src={appPath('/logo-icon.png')} alt="" width={16} height={16} />
           {t('shared.tryOpenAgents')}
         </a>
       </div>

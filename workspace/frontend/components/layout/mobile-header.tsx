@@ -1,4 +1,6 @@
 'use client';
+import { appPath } from '@/lib/app-path';
+
 
 import {
   Sheet,
@@ -98,8 +100,8 @@ export function MobileHeader() {
             </Sheet>
 
             <div className="size-7 shrink-0 overflow-hidden">
-              <Image src="/logo-black.png" alt="" width={28} height={28} className="size-full object-contain dark:hidden" />
-              <Image src="/logo-white.png" alt="" width={28} height={28} className="size-full object-contain hidden dark:block" />
+              <Image src={appPath('/logo-black.png')} alt="" width={28} height={28} className="size-full object-contain dark:hidden" />
+              <Image src={appPath('/logo-white.png')} alt="" width={28} height={28} className="size-full object-contain hidden dark:block" />
             </div>
 
             <span className="text-sm font-medium truncate">

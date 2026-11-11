@@ -1,4 +1,6 @@
 'use client';
+import { scopedLocalStorage } from '@/lib/scoped-storage';
+
 
 import { applyMessageRecalls } from '@/lib/message-recall';
 import { requestedMessageId } from '@/lib/thread-link';
@@ -77,14 +79,14 @@ function isTerminalStatus(msg: WorkspaceMessage) {
 }
 
 // Scroll diagnostics. Always on in dev; in production it's opt-in via
-// `localStorage.setItem('oa_debug_scroll','1')` so we can diagnose the rare
+// `scopedLocalStorage.setItem('oa_debug_scroll','1')` so we can diagnose the rare
 // scroll-jump in the wild (e.g. on network reconnect) without shipping console
 // noise to every user. Evaluated once at module load.
 const DEBUG_SCROLL =
   process.env.NODE_ENV !== 'production' ||
   (() => {
     try {
-      return typeof window !== 'undefined' && window.localStorage.getItem('oa_debug_scroll') === '1';
+      return typeof window !== 'undefined' && scopedLocalStorage.getItem('oa_debug_scroll') === '1';
     } catch {
       return false;
     }
