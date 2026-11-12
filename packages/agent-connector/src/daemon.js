@@ -1,5 +1,5 @@
 'use strict';
-const { descriptionArgs } = require('../../agent-collaboration/src/description');
+const { descriptionArgs, normalizeDescription } = require('../../agent-collaboration/src/description');
 
 const fs = require('fs');
 const path = require('path');
@@ -2405,6 +2405,11 @@ async _runNodeCommand(n, cmd) {
 
     // Start new agents or restart agents whose network changed
     for (const agent of newAgents) {
+      // A default-description edit applies to later joins without interrupting
+      // an active task or overwriting any Workspace's published description.
+      if (this._adapters[agent.name]) {
+        this._adapters[agent.name].description = normalizeDescription(agent.description);
+      }
       if (!oldNames.has(agent.name)) {
         await this._ensureAdapterCleared(agent.name);
         this._launchAgent(agent);

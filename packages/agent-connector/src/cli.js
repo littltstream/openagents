@@ -187,6 +187,38 @@ async function cmdStatus(connector) {
   table(rows, ['NAME', 'TYPE', 'STATE', 'NETWORK', 'RESTARTS']);
 }
 
+async function cmdDescription(connector, flags, positional) {
+  if (positional.length !== 1) {
+    throw new Error('Usage: agn description <name> [--set TEXT]');
+  }
+  const allowed = new Set(['set', 'config', 'endpoint', 'no-update-check']);
+  for (const flag of Object.keys(flags)) {
+    if (!allowed.has(flag)) throw new Error(`Unknown option --${flag} for description`);
+  }
+  const name = positional[0];
+  const agent = connector.config.getAgent(name);
+  if (!agent) throw new Error(`Agent '${name}' not found`);
+  if (!Object.hasOwn(flags, 'set')) {
+    print(agent.description === undefined ? `No local default description set for '${name}'.`
+      : agent.description === '' ? `Local default description for '${name}' is empty.` : agent.description);
+    return;
+  }
+  const values = flags.set;
+  if (!Array.isArray(values) || values.length !== 1 || typeof values[0] !== 'string') {
+    throw new Error('Use --set with exactly one description string; use --set= to clear it.');
+  }
+  connector.config.updateAgent(name, { description: values[0] });
+  if (connector.getDaemonPid()) {
+    try {
+      connector.sendDaemonCommand('reload');
+    } catch (error) {
+      throw new Error(`Local default description saved, but daemon reload could not be queued: ${error.message}`);
+    }
+  }
+  print(`Updated local default description for '${name}'.`);
+  print('Existing Workspace descriptions are unchanged.');
+}
+
 async function cmdCreate(connector, flags, positional) {
   const name = positional[0];
   if (!name) { print('Usage: agn create <name> [--type <type>] [--description <summary>] [--install]'); return; }
@@ -1269,6 +1301,7 @@ Commands:
   list                        List configured agents
   create <name> [--type T]    Create a new agent
     [--description TEXT]     Default published capability summary for new workspace memberships
+  description <name> [--set TEXT]  View or change the local default description (--set= clears it)
   remove <name>               Remove an agent
   start <name>                Start a single agent
   stop <name>                 Stop a single agent
@@ -1364,6 +1397,7 @@ async function main() {
     status: () => cmdStatus(connector),
     list: () => cmdList(connector),
     create: () => cmdCreate(connector, flags, positional),
+    description: () => cmdDescription(connector, flags, positional),
     remove: () => cmdRemove(connector, flags, positional),
     start: () => cmdStart(connector, flags, positional),
     stop: () => cmdStop(connector, flags, positional),

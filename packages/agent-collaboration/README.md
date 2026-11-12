@@ -89,6 +89,19 @@ node packages/agent-connector/bin/agent-connector.js create chip-specialist --ty
 connector.addAgent({ name: 'chip-specialist', type: 'codex', description: 'Analyze host-local chip test CSV files.' });
 ```
 
+Inspect or change an existing agent's local default without contacting Workspace:
+
+```powershell
+agn description chip-specialist
+agn description chip-specialist --set "分析芯片测试 CSV，原始文件保留在本机。"
+agn description chip-specialist --set=
+```
+
+`--set=` stores an explicitly empty default. Viewing does not rewrite the config;
+unknown agents, missing/repeated values and descriptions over 4000 characters
+are errors. A running daemon refreshes the default without restarting the agent.
+This command does not update any existing Workspace description.
+
 The local default is stored in the agent's `daemon.yaml` entry. Unicode,
 multiline summaries, quotes, and Windows paths round-trip without changing the
 agent's private instructions or skills. Maximum length is 4000 characters.

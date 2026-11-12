@@ -61,6 +61,71 @@ test('agn create resolves a relative --path, preserves --description, and reject
   assert.equal(config.getAgent('bad'), null);
 });
 
+test('agn description reads, updates and clears only the named local default', async (t) => {
+  const dir = temporaryConfig(t);
+  const config = new Config(dir);
+  config.addAgent({ name: 'chip', type: 'codex', description: 'Old summary', path: 'D:\\private\\chip', env: { CODEX_MODEL: 'test-model' } });
+  config.addAgent({ name: 'other', type: 'codex', description: 'Keep this' });
+  config.addNetwork({ id: 'workspace-id', slug: 'workspace', endpoint: 'http://127.0.0.1:1', token: 'private-fixture-token' });
+  config.setAgentNetwork('chip', 'workspace');
+  const networks = config.getNetworks();
+  // A live PID exercises the actual CLI's notification path; no process is
+  // stopped or signalled by this local metadata command.
+  fs.writeFileSync(config.pidFile, String(process.pid));
+  const cli = path.resolve(__dirname, '../../agent-connector/bin/agent-connector.js');
+  const env = { ...process.env, OPENAGENTS_SKIP_UPDATE_CHECK: '1' };
+  const call = (...args) => exec(process.execPath, [cli, 'description', 'chip', ...args, '--config', dir], { env, timeout: 15000 });
+  const before = fs.readFileSync(config.configFile, 'utf8');
+  assert.equal((await call()).stdout.trim(), 'Old summary');
+  assert.equal(fs.readFileSync(config.configFile, 'utf8'), before, 'viewing is read-only');
+  assert.equal(fs.existsSync(config.cmdFile), false);
+  const agent = config.getAgent('chip');
+  const value = '  芯片 CSV: "PASS/FAIL"\r\n文件留在 C:\\private\\chip  ';
+  const updated = await call('--set', value);
+  assert.match(updated.stdout, /Existing Workspace descriptions are unchanged/);
+  assert.deepEqual(config.getAgent('chip'), { ...agent, description: value.trim().replace(/\r\n/g, '\n') });
+  assert.equal(config.getAgent('other').description, 'Keep this');
+  assert.deepEqual(config.getNetworks(), networks);
+  await call('--set=');
+  assert.equal(config.getAgent('chip').description, '');
+  assert.match((await call()).stdout, /empty/);
+  assert.deepEqual(fs.readFileSync(config.cmdFile, 'utf8').trim().split('\n'), ['reload', 'reload']);
+});
+
+test('agn description rejects missing, repeated or oversized values without changing configuration', async (t) => {
+  const dir = temporaryConfig(t);
+  const config = new Config(dir);
+  config.addAgent({ name: 'chip', type: 'codex', description: 'Keep this' });
+  const cli = path.resolve(__dirname, '../../agent-connector/bin/agent-connector.js');
+  const env = { ...process.env, OPENAGENTS_SKIP_UPDATE_CHECK: '1' };
+  const before = fs.readFileSync(config.configFile, 'utf8');
+  for (const args of [[], ['missing'], ['chip', 'extra'], ['chip', '--set'],
+    ['chip', '--set', 'first', '--set', 'second'], ['chip', '--set', 'x'.repeat(4001)], ['chip', '--description', 'wrong-option']]) {
+    await assert.rejects(() => exec(process.execPath, [cli, 'description', ...args, '--config', dir], { env, timeout: 15000 }));
+    assert.equal(fs.readFileSync(config.configFile, 'utf8'), before);
+  }
+});
+
+test('a description reload refreshes the active adapter without restarting it', async (t) => {
+  const dir = temporaryConfig(t);
+  const config = new Config(dir);
+  config.addAgent({ name: 'chip', type: 'codex', description: 'Old default' });
+  const daemon = new Daemon(config, new EnvManager(dir), new Registry(dir));
+  daemon._log = () => {};
+  daemon._writeStatus = () => {};
+  daemon._cachedAgentNames = new Set(['chip']);
+  daemon._cachedAgentConfigs = { chip: daemon._agentConfigFingerprint(config.getAgent('chip')) };
+  daemon._adapters = { chip: { description: 'Old default' } };
+  daemon.stopAgent = () => { throw new Error('A description edit must not stop a running task'); };
+  daemon._launchAgent = () => { throw new Error('A description edit must not restart an agent'); };
+  config.updateAgent('chip', { description: 'New default' });
+  await daemon._reloadUnsafe();
+  assert.equal(daemon._adapters.chip.description, 'New default');
+  config.updateAgent('chip', { description: '' });
+  await daemon._reloadUnsafe();
+  assert.equal(daemon._adapters.chip.description, '');
+});
+
 test('adapter join carries the default and detects servers that would silently ignore it', async (t) => {
   const requests = [];
   let supportsDescription = true;
