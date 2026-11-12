@@ -92,6 +92,12 @@ describe('CLI', () => {
     assert.ok(out.includes('Usage: agn'));
   });
 
+  it('short help flag matches help', () => {
+    const result = runCapture({ env: { ...process.env, OPENAGENTS_SKIP_UPDATE_CHECK: '1' } }, '-h');
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, run('help'));
+  });
+
   it('version', () => {
     const out = run('version');
     assert.ok(out.includes('@openagents-org/agent-launcher'));

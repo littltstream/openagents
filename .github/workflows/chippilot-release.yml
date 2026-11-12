@@ -20,6 +20,7 @@ jobs:
           node-version: '22'
       - run: npm ci --prefix packages/agent-connector
       - run: node --test packages/agent-collaboration/test/*.test.js
+      - run: node --test --test-name-pattern=help packages/agent-connector/test/cli.test.js
       - run: node scripts/build-chippilot-cli.cjs
       - name: Test the installed archive independently of the checkout
         run: |
@@ -108,4 +109,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NODE_PATH: ${{ runner.temp }}/release-tools/node_modules
+          CHIPPILOT_RESET_RELEASE_SERIES: '2026-11-12'
         run: node scripts/publish-chippilot.cjs release-artifacts
