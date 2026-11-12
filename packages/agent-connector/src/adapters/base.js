@@ -25,7 +25,7 @@ const { configuredModel } = require('../agent-model');
 const { buildThreadHistory } = require('./thread-history');
 const { publishResponseArtifacts } = require('./response-artifacts');
 const { ResponseOutbox } = require('./response-outbox');
-const { childEnvironment, normalizeDescription } = require('../../../agent-collaboration/src');
+const { childEnvironment, normalizeDescription, withCollaborationTurn } = require('../../../agent-collaboration/src');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -1490,7 +1490,7 @@ class BaseAdapter {
           this._stopNoticeSent.delete(channel);
           this._stoppingChannels.delete(channel);
           this._channelTriggerId[channel] = current.messageId || null;
-          await this._handleMessage(current);
+          await withCollaborationTurn({ triggerId: current.messageId, channel }, () => this._handleMessage(current));
         }
       } catch (e) {
         this._log(`Error ${first ? 'in channel worker' : 'processing queued message'} for ${channel}: ${e.message}`, 'error');

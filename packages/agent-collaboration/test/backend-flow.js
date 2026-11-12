@@ -28,11 +28,17 @@ async function main() {
   const group = await coordinator.createGroup({ title: 'Collaboration backend test', participants: ['agent-beta'] });
   const task = await coordinator.sendMessage({ channel: group.channel, targets: ['agent-beta'], content: 'Return a test acknowledgment to agent-alpha.' });
   assert.equal(task.status, 'routed');
-  const specialist = new CollaborationClient({ ...connection, agentName: 'agent-beta', channelName: group.channel });
+  const specialist = new CollaborationClient({ ...connection, agentName: 'agent-beta', channelName: group.channel,
+    triggerId: task.event_id, triggerChannel: group.channel });
   const received = await specialist.getMessages({ channel: group.channel });
   assert.ok(received.messages.some((m) => m.id === task.event_id));
   assert.equal(received.collaboration.coordinator, 'agent-alpha');
-  await specialist.sendMessage({ channel: group.channel, targets: ['agent-alpha'], content: 'Specialist contract test acknowledgment.' });
+  const delivered = await specialist.sendMessage({ channel: group.channel, targets: ['agent-alpha'], content: 'Specialist contract test acknowledgment.' });
+  const summary = await connection.wsClient.withAgent('agent-beta').sendMessage(connection.workspaceId, group.channel,
+    connection.token, '@agent-alpha I have sent the result.', { senderName: 'agent-beta',
+      metadata: { status_kind: 'completed', in_reply_to: task.event_id } });
+  assert.deepEqual(summary.metadata.target_agents, ['__no_response__']);
+  assert.equal(summary.metadata.collaboration_delivery_event_id, delivered.event_id);
   const fresh = new CollaborationClient({ ...connection, agentName: 'agent-alpha', channelName: group.channel });
   const reply = await fresh.getMessages({ channel: group.channel, after: task.event_id });
   assert.ok(reply.messages.some((m) => m.source === 'openagents:agent-beta'));

@@ -84,7 +84,8 @@ async function handle(server, name, args) {
   if (!Object.hasOwn(methods, name)) return undefined;
   try {
     const client = new CollaborationClient({ wsClient: server.ws, workspaceId: server.workspaceId,
-      agentName: server.agentName, token: server.token, channelName: server.channelName });
+      agentName: server.agentName, token: server.token, channelName: server.channelName,
+      triggerId: server.triggerId, triggerChannel: server.triggerChannel });
     const result = await callTool(client, name, args);
     return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
   } catch (error) {

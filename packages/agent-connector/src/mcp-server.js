@@ -647,13 +647,16 @@ function isTextMime(mime) {
 // ── MCP Server ──────────────────────────────────────────────────────────────
 
 class McpServer {
-  constructor({ wsClient, workspaceId, channelName, agentName, token, disabledModules, requesterEmail = process.env.OPENAGENTS_REQUESTER_EMAIL || null }) {
+  constructor({ wsClient, workspaceId, channelName, agentName, token, disabledModules, requesterEmail = process.env.OPENAGENTS_REQUESTER_EMAIL || null,
+    triggerId = process.env.OA_COLLABORATION_TRIGGER_ID, triggerChannel = process.env.OA_COLLABORATION_CHANNEL }) {
     this.ws = wsClient;
     this.workspaceId = workspaceId;
     this.channelName = channelName;
     this.agentName = agentName;
     this.token = token;
     this.requesterEmail = requesterEmail;
+    this.triggerId = triggerId;
+    this.triggerChannel = triggerChannel;
     this.disabledModules = disabledModules || new Set();
     this.tools = buildToolDefs(this.disabledModules);
   }

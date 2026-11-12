@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { turnEnvironment } = require('./turn-context');
 const SKILL_PATH = path.resolve(__dirname, '../skills/workspace-collaboration/SKILL.md');
 const workflow = fs.readFileSync(SKILL_PATH, 'utf8').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim();
 
@@ -36,7 +37,7 @@ function buildCliSection({ endpoint, workspaceId, agentName, channelName, mode =
 }
 
 function childEnvironment(env, token) {
-  return { ...env, OA_WORKSPACE_TOKEN: token };
+  return turnEnvironment({ ...env, OA_WORKSPACE_TOKEN: token });
 }
 
 module.exports = { buildCollaborationSection, buildCliSection, childEnvironment };

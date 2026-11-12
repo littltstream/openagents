@@ -233,6 +233,55 @@ class TestProfile:
 # ---------------------------------------------------------------------------
 
 class TestSharedContext:
+    def test_paired_runtime_receives_its_agents_shared_context(self, client, workspace, specialist, db):
+        from tests.test_devices_alias import _pair
+        device, token = _pair(client, workspace, _bearer("mia", workspace))
+        member = _member(db, workspace, "deploy-bot")
+        member.node_id = device["device_id"]
+        db.commit()
+        response = _shared_context(client, workspace, "deploy-bot", {"X-Workspace-Token": token}, requester_email="vic@acme.test")
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["apply"] is True
+        assert data["shared_instructions"] == LONG_INSTRUCTIONS
+        assert data["allowed_knowledge"][0]["slug"] == specialist["slug"]
+
+    def test_device_token_cannot_read_another_runtime_or_owners_context(self, client, workspace, specialist, db):
+        from tests.test_devices_alias import _pair
+        device, token = _pair(client, workspace, _bearer("mia", workspace))
+        other, _ = _pair(client, workspace, _bearer("mia", workspace), node_key="other-runtime")
+        member = _member(db, workspace, "deploy-bot")
+        member.node_id = other["device_id"]
+        db.commit()
+        headers = {"X-Workspace-Token": token}
+        assert _shared_context(client, workspace, "deploy-bot", headers, requester_email="vic@acme.test").status_code == 403
+        member.node_id = device["device_id"]
+        member.owner_email = "adam@acme.test"
+        db.commit()
+        assert _shared_context(client, workspace, "deploy-bot", headers, requester_email="vic@acme.test").status_code == 403
+
+    def test_foreign_revoked_and_invalid_device_tokens_are_rejected(self, client, workspace, specialist, db):
+        from tests.test_devices_alias import _pair
+        from app.models import Workspace
+        device, token = _pair(client, workspace, _bearer("mia", workspace))
+        member = _member(db, workspace, "deploy-bot")
+        member.node_id = device["device_id"]
+        db.commit()
+        foreign = Workspace(name="Other", slug="other-context", password_hash="other-context-token")
+        db.add(foreign)
+        db.flush()
+        foreign_node = Node(workspace_id=foreign.id, node_key="foreign-runtime", token="foreign-device-token", owner_email="mia@acme.test", hostname="other")
+        db.add(foreign_node)
+        db.commit()
+        for bad in ("invalid-device-token", foreign_node.token):
+            assert _shared_context(client, workspace, "deploy-bot", {"X-Workspace-Token": bad}, requester_email="vic@acme.test").status_code == 403
+        response = client.delete(f"/v1/devices/{device['device_id']}", headers=_bearer("mia", workspace))
+        assert response.status_code == 200, response.text
+        assert _shared_context(client, workspace, "deploy-bot", {"X-Workspace-Token": token}, requester_email="vic@acme.test").status_code == 403
+
+    def test_human_identity_does_not_become_a_runtime_via_workspace_token(self, client, workspace, specialist):
+        assert _shared_context(client, workspace, "deploy-bot", _bearer("mia", workspace), requester_email="vic@acme.test").status_code == 403
+
     def test_machine_only(self, client, workspace, specialist):
         r = _shared_context(client, workspace, "deploy-bot", {"Authorization": "Bearer mia"}, requester_email="vic@acme.test")
         assert r.status_code == 403

@@ -726,6 +726,10 @@ class ClaudeAdapter extends BaseAdapter {
           args: mcpFinalArgs,
           env: {
             OA_WORKSPACE_TOKEN: this.token,
+            ...(this.agentEnv.OA_COLLABORATION_TRIGGER_ID ? {
+              OA_COLLABORATION_TRIGGER_ID: this.agentEnv.OA_COLLABORATION_TRIGGER_ID,
+              OA_COLLABORATION_CHANNEL: this.agentEnv.OA_COLLABORATION_CHANNEL,
+            } : {}),
             // v1.1: who asked, so escalation tools can address the owner.
             ...(this.requesterEmailFor && this.requesterEmailFor(channelName)
               ? { OPENAGENTS_REQUESTER_EMAIL: this.requesterEmailFor(channelName) } : {}),

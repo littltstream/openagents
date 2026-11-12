@@ -5,4 +5,5 @@ module.exports = {
   ...require('./tools'),
   ...require('./prompt'),
   ...require('./description'),
+  ...require('./turn-context'),
 };

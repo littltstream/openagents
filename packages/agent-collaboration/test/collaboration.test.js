@@ -10,7 +10,7 @@ const { spawn } = require('node:child_process');
 const { createInterface } = require('node:readline');
 const { WorkspaceClient } = require('../../agent-connector/src/workspace-client');
 const { McpServer, buildToolDefs } = require('../../agent-connector/src/mcp-server');
-const { CollaborationClient, callTool, buildCliSection } = require('../src');
+const { CollaborationClient, callTool, buildCliSection, withCollaborationTurn } = require('../src');
 const { buildApiSkillsPrompt } = require('../../agent-connector/src/adapters/workspace-prompt');
 const BaseAdapter = require('../../agent-connector/src/adapters/base');
 const ClaudeAdapter = require('../../agent-connector/src/adapters/claude');
@@ -174,6 +174,7 @@ test('dynamic teams, explicit dispatch, and informational reports reuse the exis
   assert.equal(routed.status, 'routed');
   const sent = state.writes[1];
   assert.deepEqual(sent.metadata.explicit_targets, ['Agent_A']);
+  assert.equal(sent.metadata.collaboration_tool, 'workspace_send_message');
   assert.equal(sent.target, `channel/${group.channel}`);
   assert.equal(sent.source, 'openagents:Agent_B');
   await assert.rejects(() => client.sendMessage({ channel: group.channel, content: 'work', targets: ['Agent_D'] }), /not a participant/);
@@ -311,6 +312,47 @@ test('skills-mode uses the actual CLI and adapter credentials without putting th
   assert.equal(plan.includes('send-message --args-file'), false);
 });
 
+test('concurrent adapter turns carry their exact trigger through the actual CLI without leaking across channels', async (t) => {
+  const { endpoint, client, state } = await fixture(t);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'oa-turn-context-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const groups = await Promise.all([1, 2].map((n) => client.createGroup({ title: `Team ${n}`, participants: ['Agent_A'] })));
+  const adapter = new BaseAdapter({ workspaceId: 'ws-1', agentName: 'Agent_B', endpoint, token: TOKEN });
+  adapter._log = () => {};
+  adapter._schedulePresenceHeartbeat = () => {};
+  adapter._handleMessage = async (message) => {
+    // Yield so both channel workers overlap before capturing their child env.
+    await new Promise((resolve) => setImmediate(resolve));
+    const file = path.join(directory, `${message.messageId}.json`);
+    fs.writeFileSync(file, JSON.stringify({ channel: message.sessionId, targets: ['Agent_A'], content: 'Please review.' }));
+    const result = await child(CLI, ['send-message', '--endpoint', endpoint, '--workspace-id', 'ws-1',
+      '--agent-name', 'Agent_B', '--channel-name', message.sessionId, '--args-file', file], adapter.agentEnv);
+    assert.equal(result.code, 0, result.stderr);
+  };
+  await Promise.all(groups.map((group, i) => adapter._channelWorker(group.channel, {
+    sessionId: group.channel, messageId: `trigger-${i}`, senderType: 'agent', content: 'Review this',
+  })));
+  for (const [i, group] of groups.entries()) {
+    const posted = state.writes.find((event) => event.type === 'workspace.message.posted' && event.target === `channel/${group.channel}`);
+    assert.equal(posted.metadata.in_reply_to, `trigger-${i}`);
+  }
+  assert.equal(adapter.agentEnv.OA_COLLABORATION_TRIGGER_ID, undefined);
+  assert.equal(adapter.agentEnv.OA_COLLABORATION_CHANNEL, undefined);
+});
+
+test('MCP receipts retain the triggering turn only when sending to its channel', async (t) => {
+  const { ws, client, state } = await fixture(t);
+  const group = await client.createGroup({ title: 'MCP team', participants: ['Agent_A'] });
+  const server = new McpServer({ wsClient: ws, workspaceId: 'ws-1', agentName: 'Agent_B', token: TOKEN,
+    channelName: group.channel, triggerId: 'task-event', triggerChannel: group.channel });
+  const delivered = await server._dispatch('workspace_send_message', { channel: group.channel, targets: ['Agent_A'], content: 'Review this.' });
+  assert.notEqual(delivered.isError, true);
+  assert.equal(state.writes.at(-1).metadata.in_reply_to, 'task-event');
+  const reported = await server._dispatch('workspace_send_message', { channel: 'general', targets: [], content: 'User report.' });
+  assert.notEqual(reported.isError, true);
+  assert.equal(state.writes.at(-1).metadata.in_reply_to, undefined);
+});
+
 test('Claude MCP mode grants collaboration writes only in execute mode', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oa-collaboration-claude-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -318,8 +360,11 @@ test('Claude MCP mode grants collaboration writes only in execute mode', (t) => 
     const adapter = new ClaudeAdapter({ workspaceId: 'ws-1', channelName: 'general',
       agentName: 'Agent_B', token: TOKEN, workingDir: dir, toolMode: 'mcp' });
     adapter._mode = mode;
-    const result = adapter._buildMcpCmd([], 'general');
+    const result = withCollaborationTurn({ triggerId: 'claude-task', channel: 'general' }, () => adapter._buildMcpCmd([], 'general'));
     t.after(() => fs.rmSync(result.mcpConfigFile, { force: true }));
+    const mcp = JSON.parse(fs.readFileSync(result.mcpConfigFile, 'utf8')).mcpServers['openagents-workspace'];
+    assert.equal(mcp.env.OA_COLLABORATION_TRIGGER_ID, 'claude-task');
+    assert.equal(mcp.env.OA_COLLABORATION_CHANNEL, 'general');
     assert.ok(result.cmd.includes('mcp__openagents-workspace__workspace_discover_agents'));
     assert.ok(result.cmd.includes('mcp__openagents-workspace__workspace_get_messages'));
     assert.equal(result.cmd.includes('mcp__openagents-workspace__workspace_create_group'), mode === 'execute');

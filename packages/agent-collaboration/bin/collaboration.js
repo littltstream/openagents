@@ -53,6 +53,7 @@ async function main(argv = process.argv.slice(2), env = process.env) {
     wsClient: new WorkspaceClient(endpoint), workspaceId: values['workspace-id'] || env.OA_WORKSPACE_ID,
     agentName: values['agent-name'] || env.OA_AGENT_NAME, token: env.OA_WORKSPACE_TOKEN,
     channelName: values['channel-name'] || env.OA_CHANNEL_NAME,
+    triggerId: env.OA_COLLABORATION_TRIGGER_ID, triggerChannel: env.OA_COLLABORATION_CHANNEL,
   });
   const args = values['args-file']
     ? JSON.parse(fs.readFileSync(values['args-file'], 'utf8').replace(/^\uFEFF/, ''))

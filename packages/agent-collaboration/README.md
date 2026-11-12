@@ -61,10 +61,21 @@ CLI usage for skill-driven adapters, including Codex and OpenClaw. Child process
 inherit `OA_WORKSPACE_TOKEN` scoped to their adapter; the prompt's command supplies
 the API endpoint, workspace, agent identity, and current channel.
 
-The installed official `agn` / desktop distribution does not automatically use
-this source change. This is a private source package, not a published npm release;
-shipping it requires distributing the two packages together. This change does not
-install or restart existing agents or deploy to the remote server.
+The ChipPilot installer and desktop build bundle this package with the connector
+(`scripts/build-chippilot-cli.cjs`). Users of that distribution do not separately
+download a collaboration skill or configure another MCP server. Claude MCP mode
+loads the connector's existing MCP server; skill-driven runtimes receive the
+generated Workspace instructions and CLI commands automatically. The official
+upstream `agn` / desktop distribution does not contain these fork changes.
+Editing the checkout does not update an already installed app or running agent.
+
+For per-turn CLI children and Claude MCP mode, the adapter supplies the triggering
+event ID through a channel-scoped child environment. A successful targeted tool
+send records that correlation. The updated backend keeps the adapter's subsequent
+automatic summary visible but does not dispatch it again when the same sender,
+channel and exact trigger already have a routed collaboration-tool receipt.
+Uncorrelated messages and runtimes without per-turn context retain normal routing;
+timestamps or response text are not used to guess which turn sent a message.
 
 ## Default capability descriptions
 

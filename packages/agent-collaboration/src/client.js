@@ -57,12 +57,14 @@ function candidate(agent) {
 }
 
 class CollaborationClient {
-  constructor({ wsClient, workspaceId, agentName: caller, token, channelName: origin, sessionId }) {
+  constructor({ wsClient, workspaceId, agentName: caller, token, channelName: origin, sessionId, triggerId, triggerChannel }) {
     this.workspaceId = text(workspaceId, 'workspaceId');
     this.agentName = agentName(caller);
     this.token = text(token, 'workspace token');
     this.channelName = origin;
     this.sessionId = sessionId;
+    this.triggerId = triggerId;
+    this.triggerChannel = triggerChannel;
     // Never reuse a machine-scoped client's identity for an agent operation.
     this.ws = wsClient.withAgent(this.agentName);
   }
@@ -181,7 +183,10 @@ class CollaborationClient {
     const event = await this._event({
       type: 'workspace.message.posted', source: `openagents:${this.agentName}`, target: `channel/${name}`,
       payload: { content: body, message_type: 'chat' },
-      metadata: { explicit_targets: routing, target_agents: routing, ...(collaboration ? { collaboration } : {}) },
+      metadata: { explicit_targets: routing, target_agents: routing,
+        collaboration_tool: 'workspace_send_message',
+        ...(this.triggerId && name === this.triggerChannel ? { in_reply_to: this.triggerId } : {}),
+        ...(collaboration ? { collaboration } : {}) },
     });
     const routed = event.metadata && event.metadata.target_agents;
     const missing = recipients.filter((target) => !Array.isArray(routed) || !routed.includes(target));
