@@ -1,5 +1,5 @@
 import React from "react"
-import { describe, it, expect, beforeEach, vi } from "vitest"
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import Agents from "./index"
@@ -92,6 +92,12 @@ function makeAgent(partial: Partial<Agent>): Agent {
 }
 
 const showToast = vi.fn()
+
+beforeAll(async () => {
+  // Load the real lazy editor before measuring UI interactions. Cold Vite
+  // transformation of the shared web editor can exceed findByRole's timeout.
+  await import("./local-agent-setup")
+})
 
 beforeEach(() => {
   // Zustand store is module-global; reset it so tests don't leak agents.

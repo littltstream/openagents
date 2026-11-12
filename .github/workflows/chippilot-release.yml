@@ -69,9 +69,9 @@ jobs:
         working-directory: workspace/frontend
       - run: npm run typecheck
         working-directory: packages/launcher
-      - name: Test deployment and authentication
+      - name: Test deployment, authentication and workspace navigation
         working-directory: packages/launcher
-        run: npx vitest run src/shared/deployment.test.ts src/main/auth/oidc.test.ts src/main/auth/account.test.ts
+        run: npx vitest run --maxWorkers=2 src/shared/deployment.test.ts src/main/auth/oidc.test.ts src/main/auth/account.test.ts src/main/auth/endpoints.test.ts src/renderer/lib/workspace-urls.test.ts src/renderer/lib/workspace-navigation.test.tsx src/renderer/components/workspaces/WorkspaceQuickConnect.test.tsx src/renderer/pages/agents/index.test.tsx
       - run: npm run build
         working-directory: packages/launcher
       - name: Package native desktop application (unsigned)
