@@ -3,6 +3,8 @@ name: ChipPilot distribution
 on:
   push:
     tags: ['chippilot-v*']
+    branches: ['feature/chippilot-distribution']
+    paths: ['chippilot-release.json']
   workflow_dispatch:
 
 permissions:
@@ -61,13 +63,17 @@ jobs:
           name: cli-release
           path: artifacts/chippilot
       - run: node scripts/prepare-chippilot-desktop.mjs
-      - run: npm install --prefix packages/launcher --no-audit --no-fund
-      - run: npm ci --prefix workspace/frontend --no-audit --no-fund
-      - run: npm run typecheck --prefix packages/launcher
+      - run: npm install --no-audit --no-fund
+        working-directory: packages/launcher
+      - run: npm ci --no-audit --no-fund
+        working-directory: workspace/frontend
+      - run: npm run typecheck
+        working-directory: packages/launcher
       - name: Test deployment and authentication
         working-directory: packages/launcher
         run: npx vitest run src/shared/deployment.test.ts src/main/auth/oidc.test.ts src/main/auth/account.test.ts
-      - run: npm run build --prefix packages/launcher
+      - run: npm run build
+        working-directory: packages/launcher
       - name: Package native desktop application (unsigned)
         working-directory: packages/launcher
         run: npx electron-builder --${{ matrix.target }} --${{ matrix.arch }} --publish never
