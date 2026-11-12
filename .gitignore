@@ -12,6 +12,8 @@ __pycache__/
 sdk/studio/build/
 develop-eggs/
 dist/
+artifacts/
+packages/launcher/vendor/
 downloads/
 eggs/
 .eggs/

@@ -88,6 +88,12 @@ function tierAt(dir: string | null, source: CoreSource): CoreTier | null {
  * precedence (downloaded before packaged), because sort is stable.
  */
 export function coreTiers(): CoreTier[] {
+  const bundled = tierAt(bundledCoreDir(), 'bundled')
+  if (bundled && JSON.parse(fs.readFileSync(path.join(bundled.dir, 'package.json'), 'utf8')).chippilot) {
+    // A fork release must run its matching collaboration core, even when an
+    // unrelated official npm installation has a higher version number.
+    return [bundled]
+  }
   return orderCoreTiers([
     tierAt(LOCAL_CORE, "local"),
     tierAt(GLOBAL_CORE, "global"),

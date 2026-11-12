@@ -734,6 +734,7 @@ declare global {
        */
       setChromeDimmed(dim: boolean): Promise<unknown>
       getAllSettings(): Promise<Record<string, unknown>>
+      getServerConfig(): import('../../shared/deployment').DeploymentConfig
       /** Whether the local connector (the daemon) runs on this device. */
       getLocalConnector(): Promise<boolean | null>
       /** Starts or stops the daemon, taking local agents online or offline. */

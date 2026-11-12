@@ -15,6 +15,10 @@ export interface SettingsValues {
   httpsProxy: string
   noProxy: string
   workspaceEndpoint: string
+  workspaceWebUrl: string
+  oidcIssuerUrl: string
+  oidcClientId: string
+  updateFeedUrl: string
   downloadRegion: string
 }
 
@@ -30,6 +34,10 @@ const DEFAULTS: SettingsValues = {
   httpsProxy: "",
   noProxy: "",
   workspaceEndpoint: "",
+  workspaceWebUrl: "",
+  oidcIssuerUrl: "",
+  oidcClientId: "",
+  updateFeedUrl: "",
   downloadRegion: "auto",
 }
 
@@ -101,6 +109,10 @@ export function useSettingsState(): SettingsState {
         httpsProxy: (all.httpsProxy as string) || "",
         noProxy: (all.noProxy as string) || "",
         workspaceEndpoint: (all.workspaceEndpoint as string) || "",
+        workspaceWebUrl: (all.workspaceWebUrl as string) || "",
+        oidcIssuerUrl: (all.oidcIssuerUrl as string) || "",
+        oidcClientId: (all.oidcClientId as string) || "",
+        updateFeedUrl: (all.updateFeedUrl as string) || "",
         downloadRegion: (all.downloadRegion as string) || "auto",
       })
     } catch {}

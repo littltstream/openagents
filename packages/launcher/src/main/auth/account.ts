@@ -1,6 +1,7 @@
 import { accountApiBase, apiBase, webBase } from "./endpoints"
 import { authFetch } from "./http"
 import { registrationPasswordError } from "../../shared/account-registration"
+import { startOidcLogin, refreshOidcSession, type OidcConfig } from './oidc'
 import {
   refreshIdToken,
   signInWithCustomToken,
@@ -43,6 +44,7 @@ export interface AccountWorkspace {
 }
 
 export interface AccountDeps {
+  oidc?: () => OidcConfig
   /** The configured workspace endpoint, if the user set one. */
   endpoint: () => string | undefined
   /** Hand a URL to the OS browser (web-security's openExternalSafely). */
@@ -106,6 +108,8 @@ export class AccountManager {
   private _session: AccountSession | null = null
   private _loaded = false
   private _pending: Handoff | null = null
+  private _oidcPending: Awaited<ReturnType<typeof startOidcLogin>> | null = null
+  private _authAttempt = 0
   private _sessionTimer: ReturnType<typeof setTimeout> | null = null
   private _renewal: { session: AccountSession; promise: Promise<string> } | null = null
 
@@ -155,6 +159,23 @@ export class AccountManager {
    * session there is usually what makes this one click.
    */
   async signIn(): Promise<AccountInfo> {
+    if (this._deps.oidc) {
+      this.cancelSignIn()
+      const attempt = this._authAttempt
+      const login = await startOidcLogin(this._deps.oidc(), this._deps.openExternal)
+      if (attempt !== this._authAttempt) {
+        login.close()
+        await login.result.catch(() => {})
+        throw new Error('SIGN_IN_CANCELLED')
+      }
+      this._oidcPending = login
+      try {
+        const session = await login.result
+        if (attempt !== this._authAttempt) throw new Error('SIGN_IN_CANCELLED')
+        this._set(session)
+        return toAccountInfo(this._session!)
+      } finally { if (this._oidcPending === login) this._oidcPending = null }
+    }
     // A second click while one is in flight replaces it — the first browser tab
     // is already stale, and leaving its port open would be a second live gate.
     this.cancelSignIn()
@@ -231,6 +252,7 @@ export class AccountManager {
    * form turns that into a retry with the widget.
    */
   async captchaConfig(): Promise<CaptchaConfig> {
+    if (this._deps.oidc) return CAPTCHA_DISABLED
     const cached = this._captchaConfig
     if (cached && Date.now() - cached.at < CAPTCHA_CONFIG_TTL_MS) return cached.value
     let value = CAPTCHA_DISABLED
@@ -436,6 +458,9 @@ export class AccountManager {
 
   /** Give the loopback port back without waiting for the browser. */
   cancelSignIn(): void {
+    this._authAttempt++
+    this._oidcPending?.close()
+    this._oidcPending = null
     this._pending?.close()
     this._pending = null
   }
@@ -514,6 +539,13 @@ export class AccountManager {
     this._ensureLoaded()
     const session = this._session
     if (!session) throw new Error("NOT_SIGNED_IN")
+    if (session.kind === 'oidc') {
+      const config = this._deps.oidc?.()
+      if (!config || config.issuer !== session.oidcIssuer || config.apiUrl !== session.endpoint) {
+        this._set(null)
+        throw new Error('SESSION_SERVER_CHANGED')
+      }
+    }
     if (isFresh(session) && (session.kind !== "workspace" || session.expiresAt - Date.now() / 1000 > 86400)) return session.token
     if (this._renewal?.session === session) return this._renewal.promise
     const promise = this._renewSession(session)
@@ -523,6 +555,14 @@ export class AccountManager {
   }
 
   private async _renewSession(session: AccountSession): Promise<string> {
+    if (session.kind === 'oidc') {
+      const config = this._deps.oidc?.()
+      if (!config) throw new Error('OIDC server is not configured')
+      const renewed = await refreshOidcSession(config, session)
+      if (this._session !== session) throw new Error('SESSION_CHANGED')
+      this._set(renewed)
+      return renewed.token
+    }
     if (session.kind === "workspace" && isFresh(session)) {
       const res = await authFetch(`${apiBase(this._deps.endpoint())}/v1/auth/session/renew`, {
         method: "POST",

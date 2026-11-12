@@ -1,0 +1,10 @@
+{
+  "repository": "littltstream/openagents",
+  "tag": "chippilot-v1.1.14.1",
+  "desktopVersion": "1.1.14-chippilot.1",
+  "cliVersion": "0.2.226-chippilot.1",
+  "defaultApiUrl": "https://api.chippilot.cn",
+  "defaultWebUrl": "https://openagents.chippilot.cn",
+  "defaultOidcIssuer": "https://auth.chippilot.cn/realms/openagents",
+  "oidcClientId": "openagents-workspace"
+}

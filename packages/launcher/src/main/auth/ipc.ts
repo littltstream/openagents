@@ -13,6 +13,7 @@ import { popupWorkspaceTabContextMenu, popupWorkspaceTabMenu } from "../workspac
 import { AccountManager, type AccountWorkspace } from "./account"
 import { webBase } from "./endpoints"
 import type { AccountInfo } from "./session-store"
+import type { OidcConfig } from './oidc'
 import type { NodeStatus } from "../agent-manager"
 import { pushNotification } from "../notifications"
 
@@ -24,6 +25,7 @@ import { pushNotification } from "../notifications"
  */
 
 export interface AccountIpcDeps {
+  oidc?: () => OidcConfig
   /**
    * The look and feel the launcher is currently in, and a way to change it.
    * The hosted workspace shares both — see shared/appearance-bridge.
@@ -57,6 +59,7 @@ export function registerAccountIpc(deps: AccountIpcDeps): AccountManager {
   let viewRequest = 0
   const seenReplies = new Set<string>()
   const account = new AccountManager({
+    oidc: deps.oidc,
     endpoint: deps.endpoint,
     openExternal: (url) => void openExternalSafely(url),
     onChange: (info: AccountInfo | null) => {
@@ -116,13 +119,13 @@ export function registerAccountIpc(deps: AccountIpcDeps): AccountManager {
   ipcMain.handle(
     "account:sign-in-password",
     (_e, email: string, password: string, captcha?: unknown) =>
-      account.signInWithPassword(String(email || ""), String(password || ""), captchaArg(captcha)),
+      deps.oidc ? account.signIn() : account.signInWithPassword(String(email || ""), String(password || ""), captchaArg(captcha)),
   )
   ipcMain.handle("account:cancel-sign-in", () => account.cancelSignIn())
   ipcMain.handle(
     "account:sign-up-password",
     (_e, email: string, password: string, displayName?: string, captcha?: unknown) =>
-      account.signUpWithPassword(String(email || ""), String(password || ""), String(displayName || ""), captchaArg(captcha)),
+      deps.oidc ? account.signIn() : account.signUpWithPassword(String(email || ""), String(password || ""), String(displayName || ""), captchaArg(captcha)),
   )
   // The page shows the confirmation; its Sign out comes back as
   // workspace-view:sign-out. See WorkspaceHost.requestSignOut.

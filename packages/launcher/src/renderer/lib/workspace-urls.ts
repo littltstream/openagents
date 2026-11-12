@@ -18,6 +18,8 @@ export function workspacePageUrl(ws: Workspace): string {
 }
 
 export function workspaceWebBaseUrl(endpoint?: string): string {
+  const server = typeof window !== 'undefined' && window.api?.getServerConfig?.()
+  if (server && (!endpoint || endpoint.replace(/\/+$/, '') === server.workspaceEndpoint)) return server.workspaceWebUrl
   const baseUrl = (endpoint || DEFAULT_WORKSPACE_WEB_BASE_URL).replace(/\/$/, "")
   return baseUrl.replace("workspace-endpoint", "workspace").replace(/\/v1$/, "")
 }

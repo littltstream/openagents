@@ -17,7 +17,7 @@ import { app, safeStorage } from "electron"
  *    renewed in the background (see firebase-rest.ts).
  */
 export interface AccountSession {
-  kind: "workspace" | "firebase"
+  kind: "workspace" | "firebase" | "oidc"
   token: string
   email: string
   displayName: string | null
@@ -25,6 +25,9 @@ export interface AccountSession {
   expiresAt: number
   /** Firebase only — what the hourly renewal is done with. */
   refreshToken?: string
+  oidcIssuer?: string
+  oidcSubject?: string
+  endpoint?: string
 }
 
 /** What the renderer is told about the account; never the token itself. */

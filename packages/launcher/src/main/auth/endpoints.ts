@@ -19,6 +19,14 @@
  * here rather than reached for across the boundary.
  */
 
+import { resolveDeployment, type DeploymentConfig } from '../../shared/deployment'
+
+let readSettings: ((key: string) => unknown) | null = null
+export function configureDeployment(reader: (key: string) => unknown): void { readSettings = reader }
+export function configuredDeployment(): DeploymentConfig {
+  if (!readSettings) throw new Error('Deployment settings are not initialized')
+  return resolveDeployment(readSettings)
+}
 export const DEFAULT_API_BASE = "https://workspace-endpoint.openagents.org"
 
 /**
@@ -27,6 +35,7 @@ export const DEFAULT_API_BASE = "https://workspace-endpoint.openagents.org"
  * system. Overridable for a staging site.
  */
 export function loginBase(): string {
+  if (readSettings) return configuredDeployment().workspaceWebUrl
   return (
     process.env.OPENAGENTS_LOGIN_BASE?.replace(/\/$/, "") ||
     "https://openagents.org"
@@ -46,6 +55,7 @@ export function loginBase(): string {
  * Overridable for a staging deployment, alongside OPENAGENTS_LOGIN_BASE.
  */
 export function accountApiBase(): string {
+  if (readSettings) return configuredDeployment().workspaceEndpoint
   return (
     process.env.OPENAGENTS_ACCOUNT_API_BASE?.replace(/\/$/, "") ||
     "https://endpoint.openagents.org"
@@ -54,7 +64,7 @@ export function accountApiBase(): string {
 
 /** REST base for the account API — what `workspaceEndpoint` normalizes to. */
 export function apiBase(configured?: string): string {
-  return (configured || DEFAULT_API_BASE).replace(/\/$/, "")
+  return (configured || (readSettings ? configuredDeployment().workspaceEndpoint : DEFAULT_API_BASE)).replace(/\/$/, "")
 }
 
 /**
@@ -67,6 +77,7 @@ export function apiBase(configured?: string): string {
  * local dev server being pointed at the hosted backend.
  */
 export function webBase(configured?: string): string {
+  if (readSettings && (!configured || apiBase(configured) === configuredDeployment().workspaceEndpoint)) return configuredDeployment().workspaceWebUrl
   const override = process.env.OPENAGENTS_WORKSPACE_WEB_BASE
   if (override) return override.replace(/\/$/, "")
   return apiBase(configured)

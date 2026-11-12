@@ -94,6 +94,14 @@ async function fetchLatest(timeoutMs = 2500) {
  * Return { current, latest, isNewer } or null if the check failed / offline.
  */
 async function checkForUpdate() {
+  const fork = require('../package.json').chippilot;
+  if (fork) {
+    const response = await fetch(`https://github.com/${fork.repository}/releases/latest/download/release.json`, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`Release check failed: HTTP ${response.status}`);
+    const release = await response.json();
+    if (typeof release.cliVersion !== 'string' || release.repository !== fork.repository) throw new Error('Invalid ChipPilot release manifest');
+    return { current: currentVersion(), latest: release.cliVersion, isNewer: compareSemver(release.cliVersion, currentVersion()) > 0 };
+  }
   const current = currentVersion();
   let latest = loadCache();
   if (!latest) {
@@ -201,6 +209,13 @@ function findNpmBin(opts = {}) {
  * Returns true on success. `opts` are injectable for testing.
  */
 function runUpdate(opts = {}) {
+  if (require('../package.json').chippilot) {
+    const installer = path.resolve(__dirname, '../installers', process.platform === 'win32' ? 'install.ps1' : 'install.sh');
+    const result = spawnSync(process.platform === 'win32' ? 'powershell.exe' : 'bash',
+      process.platform === 'win32' ? ['-NoProfile', '-File', installer] : [installer], { stdio: 'inherit' });
+    if (result.error) throw result.error;
+    return result.status === 0;
+  }
   const platform = opts.platform || process.platform;
   const spawn = opts.spawn || spawnSync;
   const npmBin = opts.npmBin || findNpmBin({ platform });

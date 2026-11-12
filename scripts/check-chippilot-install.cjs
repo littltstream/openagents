@@ -1,0 +1,16 @@
+'use strict';
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const root = path.resolve(process.argv[2]);
+const pkg = path.join(root, 'nodejs/node_modules/@openagents-org/agent-launcher');
+const manifest = require(path.join(pkg, 'package.json'));
+assert.ok(manifest.chippilot);
+const { WorkspaceClient } = require(path.join(pkg, 'src/workspace-client'));
+assert.equal(new WorkspaceClient().endpoint, manifest.chippilot.defaultApiUrl);
+const tools = require(path.join(pkg, 'vendor/agent-collaboration/src')).defs.map(t => t.name);
+for (const tool of ['workspace_discover_agents', 'workspace_get_agent_profile', 'workspace_create_group', 'workspace_send_message', 'workspace_get_messages']) assert.ok(tools.includes(tool), tool);
+require(pkg);
+const { buildToolDefs } = require(path.join(pkg, 'src/mcp-server'));
+const exposed = buildToolDefs(new Set()).map(t => t.name);
+for (const tool of tools) assert.ok(exposed.includes(tool), `MCP is missing ${tool}`);
+console.log(`Validated standalone release ${manifest.version}: ${tools.length} collaboration tools`);

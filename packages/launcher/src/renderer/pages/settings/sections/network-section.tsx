@@ -131,6 +131,20 @@ export function NetworkSection({
         </Row>
       </SettingsCard>
 
+      <SettingsCard title="服务器与登录 / Server and sign-in">
+        {([
+          ['workspaceWebUrl', 'Workspace 网页地址 / Web URL'],
+          ['oidcIssuerUrl', 'OIDC issuer（包含 /realms/…）'],
+          ['oidcClientId', 'OIDC Client ID'],
+          ['updateFeedUrl', '安装包更新地址 / Update feed'],
+        ] as const).map(([key, label]) => (
+          <Row key={key} stacked label={label}>
+            <Input value={values[key]} onChange={(e) => setLocal(key, e.target.value)} onBlur={() => persist(key)} />
+          </Row>
+        ))}
+        <p className="text-xs text-muted-foreground">OIDC 回调地址： http://127.0.0.1:18765/callback 。服务器管理员需将它加入客户端允许的回调地址。修改服务器后请重新登录。</p>
+      </SettingsCard>
+
       <SettingsCard
         title={t("settings.network.proxyGroup")}
         desc={t("settings.network.note")}

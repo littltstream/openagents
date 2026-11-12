@@ -1,0 +1,105 @@
+name: ChipPilot distribution
+
+on:
+  push:
+    tags: ['chippilot-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix packages/agent-connector
+      - run: node --test packages/agent-collaboration/test/*.test.js
+      - run: node scripts/build-chippilot-cli.cjs
+      - name: Test the installed archive independently of the checkout
+        run: |
+          CHIPPILOT_NO_PATH=1 CHIPPILOT_INSTALL_ROOT="$RUNNER_TEMP/installed-cli" CHIPPILOT_ARCHIVE_PATH="$PWD/artifacts/chippilot/chippilot-cli.tgz" bash install.sh
+          "$RUNNER_TEMP/installed-cli/nodejs/node_modules/.bin/agn" version
+          node scripts/check-chippilot-install.cjs "$RUNNER_TEMP/installed-cli"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-release
+          path: artifacts/chippilot/*
+          if-no-files-found: error
+  desktop:
+    needs: cli
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win
+            arch: x64
+          - os: ubuntu-22.04
+            target: linux
+            arch: x64
+          - os: macos-15-intel
+            target: mac
+            arch: x64
+          - os: macos-15
+            target: mac
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: cli-release
+          path: artifacts/chippilot
+      - run: node scripts/prepare-chippilot-desktop.mjs
+      - run: npm install --prefix packages/launcher --no-audit --no-fund
+      - run: npm ci --prefix workspace/frontend --no-audit --no-fund
+      - run: npm run typecheck --prefix packages/launcher
+      - name: Test deployment and authentication
+        working-directory: packages/launcher
+        run: npx vitest run src/shared/deployment.test.ts src/main/auth/oidc.test.ts src/main/auth/account.test.ts
+      - run: npm run build --prefix packages/launcher
+      - name: Package native desktop application (unsigned)
+        working-directory: packages/launcher
+        run: npx electron-builder --${{ matrix.target }} --${{ matrix.arch }} --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}-${{ matrix.arch }}
+          path: |
+            packages/launcher/dist/*.exe
+            packages/launcher/dist/*.msi
+            packages/launcher/dist/*.dmg
+            packages/launcher/dist/*.zip
+            packages/launcher/dist/*.AppImage
+            packages/launcher/dist/*.deb
+            packages/launcher/dist/*.blockmap
+            packages/launcher/dist/latest*.yml
+          if-no-files-found: error
+  publish:
+    needs: [cli, desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+      - run: npm install --prefix "$RUNNER_TEMP/release-tools" --ignore-scripts --no-audit --no-fund js-yaml@4.1.0
+      - name: Publish the CLI and all native desktop builds to this fork
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NODE_PATH: ${{ runner.temp }}/release-tools/node_modules
+        run: node scripts/publish-chippilot.cjs release-artifacts

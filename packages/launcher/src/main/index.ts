@@ -21,6 +21,8 @@ import fs from "fs"
 import os from "os"
 import { execFile } from "child_process"
 import { Store, settingsFilePath } from "./store"
+import { DEPLOYMENT_DEFAULTS, deploymentUrl } from '../shared/deployment'
+import { configureDeployment, configuredDeployment } from './auth/endpoints'
 import { isUpgradeAvailable } from "../shared/version-compare"
 import { readPathEnv, writePathEnv, withPathEnv } from "./env"
 import {
@@ -256,7 +258,8 @@ const HAS_RUN_BEFORE = ((): boolean => {
   return found.length > 0
 })()
 
-const store = new Store()
+const store = new Store(DEPLOYMENT_DEFAULTS)
+configureDeployment((key) => store.get(key))
 
 // Notification prefs live in settings.json like every other preference, so they
 // survive a restart and travel with export/import. Wired here rather than
@@ -363,6 +366,13 @@ function bundledCoreVersion(): string | null {
 }
 
 async function ensureCoreLibrary(): Promise<void> {
+  const packaged = bundledCoreDir()
+  if (!packaged) throw new Error('The desktop package is missing its collaboration core')
+  const bundledManifest = JSON.parse(fs.readFileSync(path.join(packaged, 'package.json'), 'utf8'))
+  if (bundledManifest.chippilot) {
+    coreVersion = bundledManifest.version
+    return
+  }
   const corePkgPath = path.join(GLOBAL_MODULES, CORE_PKG, "package.json")
   let installedVersion: string | null = null
 
@@ -548,6 +558,7 @@ async function ensureCoreLibrary(): Promise<void> {
 }
 
 async function checkCoreUpdate(): Promise<void> {
+  if (bundledCoreDir() && JSON.parse(fs.readFileSync(path.join(bundledCoreDir()!, 'package.json'), 'utf8')).chippilot) return
   const npmCmd = findNpmCommand()
   if (!npmCmd) return
   try {
@@ -1621,7 +1632,12 @@ function setupIPC(): void {
   })
 
   ipcMain.handle("settings:get", (_e, key) => store.get(key))
+  ipcMain.on('server:config', (event) => { event.returnValue = configuredDeployment() })
   ipcMain.handle("settings:set", (_e, key, value) => {
+    if (['workspaceEndpoint', 'workspaceWebUrl', 'oidcIssuerUrl', 'updateFeedUrl'].includes(key)) value = deploymentUrl(value, key)
+    if (key === 'oidcClientId' && (typeof value !== 'string' || !value.trim())) throw new Error('OIDC Client ID is required')
+    if (store.get(key) === value) return
+    if (['workspaceEndpoint', 'workspaceWebUrl', 'oidcIssuerUrl', 'oidcClientId'].includes(key)) accountManager?.signOut()
     store.set(key, value)
     if (key === "workspaceEndpoint" && agentManager) {
       agentManager.reloadCore()
@@ -2267,6 +2283,9 @@ function setupIPC(): void {
   })
 
   ipcMain.handle("core:update", async () => {
+    if (bundledCoreDir() && JSON.parse(fs.readFileSync(path.join(bundledCoreDir()!, 'package.json'), 'utf8')).chippilot) {
+      return { success: false, error: 'The collaboration core is bundled with ChipPilot. Update the desktop application to update it.' }
+    }
     // Run bundled `node npm-cli.js` directly (no shell, argv array) so a
     // non-ASCII home path survives on Windows — the `.cmd` shim does not.
     const npm = resolveNpmInvocation()
@@ -2656,6 +2675,10 @@ function setupIPC(): void {
   // module: signing in gates the workspace half of the app. Earlier handlers
   // read the manager when invoked, after setup has finished.
   accountManager = registerAccountIpc({
+    oidc: () => {
+      const server = configuredDeployment()
+      return { issuer: server.oidcIssuerUrl, clientId: server.oidcClientId, apiUrl: server.workspaceEndpoint }
+    },
     endpoint: () => normalizeWorkspaceEndpoint(store.get("workspaceEndpoint")),
     getWindow: () => mainWindow,
     // Both run only for "Connect this computer" in the workspace, which asks
