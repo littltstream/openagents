@@ -6,6 +6,7 @@ import Agents from "./index"
 import { useAgentsStore } from "../../store/agents"
 import { useUiStore } from "../../store/ui"
 import type { Agent } from "../../types"
+import { DEPLOYMENT_DEFAULTS } from "../../../shared/deployment"
 
 // Analytics fires network calls (posthog) — stub it out for the jsdom run.
 vi.mock("../../lib/analytics", () => ({ capture: vi.fn(), group: vi.fn() }))
@@ -255,7 +256,7 @@ describe("ConnectWorkspaceDialog — picking a workspace", () => {
     await screen.findByText(/isn't in any workspace yet/i)
     // Getting a code is a separate action: it opens the web app.
     await user.click(screen.getByRole("button", { name: /get a pairing code/i }))
-    expect(api.openExternal).toHaveBeenCalledWith("https://workspace.openagents.org")
+    expect(api.openExternal).toHaveBeenCalledWith(DEPLOYMENT_DEFAULTS.workspaceWebUrl)
 
     await user.type(screen.getByRole("textbox", { name: /^pairing code$/i }), "abcd2345")
     await user.click(screen.getByTestId("ws-pair-submit"))

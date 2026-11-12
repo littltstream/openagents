@@ -4,8 +4,7 @@ import { Trans, useTranslation } from "react-i18next"
 import { Input } from "../ui/input"
 import { cn } from "../../lib/utils"
 import { formatCode } from "../../lib/pairing-code"
-
-const WORKSPACE_SITE = "https://workspace.openagents.org"
+import { workspaceDisplayHost, workspaceWebBaseUrl } from "../../lib/workspace-urls"
 
 /**
  * The pairing-code field. State and the action that submits it live with the
@@ -58,11 +57,12 @@ export function PairingCodeHowTo({ className }: { className?: string }): React.J
       <p className="m-0">
         <Trans
           i18nKey="workspaces.quickConnect.howTo.step1"
+          values={{ host: workspaceDisplayHost() }}
           components={{
             1: (
               <button
                 type="button"
-                onClick={() => window.api.openExternal(WORKSPACE_SITE)}
+                onClick={openWorkspaceSite}
                 className="cursor-pointer border-0 bg-transparent p-0 text-xs text-primary underline underline-offset-2"
               />
             ),
@@ -75,5 +75,5 @@ export function PairingCodeHowTo({ className }: { className?: string }): React.J
 }
 
 export function openWorkspaceSite(): void {
-  window.api.openExternal(WORKSPACE_SITE)
+  window.api.openExternal(workspaceWebBaseUrl())
 }

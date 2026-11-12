@@ -138,7 +138,7 @@ export function NetworkSection({
           ['oidcClientId', 'OIDC Client ID'],
           ['updateFeedUrl', '安装包更新地址 / Update feed'],
         ] as const).map(([key, label]) => (
-          <Row key={key} stacked label={label}>
+          <Row key={key} stacked label={label} desc={key === 'workspaceWebUrl' ? t('settings.network.workspaceWebUrlDesc') : undefined}>
             <Input value={values[key]} onChange={(e) => setLocal(key, e.target.value)} onBlur={() => persist(key)} />
           </Row>
         ))}

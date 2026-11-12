@@ -68,16 +68,15 @@ export function apiBase(configured?: string): string {
 }
 
 /**
- * The web origin that serves the workspace pages. `workspace-endpoint.x` and
- * `workspace.x` are the same deployment; anything else is assumed to serve
- * both from one origin.
+ * The configured frontend serves all workspace navigation, including records
+ * that still contain an old API endpoint. API calls keep their own endpoint.
  *
  * The override exists for the case the derivation cannot cover: a front end
  * served from somewhere unrelated to its API — a preview deployment, or a
  * local dev server being pointed at the hosted backend.
  */
 export function webBase(configured?: string): string {
-  if (readSettings && (!configured || apiBase(configured) === configuredDeployment().workspaceEndpoint)) return configuredDeployment().workspaceWebUrl
+  if (readSettings) return configuredDeployment().workspaceWebUrl
   const override = process.env.OPENAGENTS_WORKSPACE_WEB_BASE
   if (override) return override.replace(/\/$/, "")
   return apiBase(configured)

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { accountApiBase, apiBase, webBase, DEFAULT_API_BASE } from "./endpoints"
 
@@ -49,5 +49,22 @@ describe("accountApiBase", () => {
     } finally {
       delete process.env.OPENAGENTS_ACCOUNT_API_BASE
     }
+  })
+})
+
+describe("configured desktop deployment", () => {
+  it("uses its frontend for old workspace endpoints while keeping the API independent", async () => {
+    vi.resetModules()
+    const endpoints = await import("./endpoints")
+    const server: Record<string, string> = {
+      workspaceEndpoint: "https://api.example.test",
+      workspaceWebUrl: "https://workspace.example.test:3443/",
+    }
+    endpoints.configureDeployment((key) => server[key])
+    for (const saved of [undefined, "http://127.0.0.1:8000", "http://101.43.200.65:8000", "https://api.chippilot.icu"]) {
+      expect(endpoints.webBase(saved)).toBe("https://workspace.example.test:3443")
+    }
+    expect(endpoints.accountApiBase()).toBe(server.workspaceEndpoint)
+    expect(endpoints.apiBase("http://127.0.0.1:8000")).toBe("http://127.0.0.1:8000")
   })
 })

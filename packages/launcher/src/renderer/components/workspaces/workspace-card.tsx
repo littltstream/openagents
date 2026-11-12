@@ -117,7 +117,7 @@ export function WorkspaceCard({
       (lastMessagePreview ? ` — ${lastMessagePreview}` : "")
     : undefined
   const meta = [
-    `${workspaceDisplayHost(ws.endpoint)}/${slug}`,
+    `${workspaceDisplayHost()}/${slug}`,
     t("workspaces.card.agentCount", { count: agents.length }),
     active ? t("workspaces.card.activeAt", { time: active }) : revoked ? null : t("workspaces.card.noActivity"),
   ].filter((m): m is string => !!m)
