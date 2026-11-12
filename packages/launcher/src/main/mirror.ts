@@ -32,7 +32,7 @@ const MIRROR_NPM = [
 
 // Launcher self-update feed (electron-updater generic provider). Mirrored here
 // so a region/user override can redirect it the same way Node and npm are.
-const OFFICIAL_LAUNCHER_FEED = "https://dl.openagents.org/launcher/stable"
+const OFFICIAL_LAUNCHER_FEED = "https://github.com/littltstream/openagents/releases/latest/download"
 
 export type RegionPref = "auto" | "global" | "cn"
 

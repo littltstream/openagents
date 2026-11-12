@@ -114,6 +114,23 @@ export function WorkspaceSignIn(): React.JSX.Element {
 
   const pending = busy || signingIn
 
+  if (window.api.getServerConfig?.().oidcIssuerUrl) {
+    const server = window.api.getServerConfig()
+    return (
+      <div className="flex h-full items-center justify-center bg-muted/50 p-8">
+        <section className="w-full max-w-md rounded-lg border bg-card p-10 shadow-xs">
+          <h1 className="text-2xl font-semibold">ChipPilot Workspace</h1>
+          <p className="mt-3 break-all text-sm text-muted-foreground">{server.workspaceWebUrl}</p>
+          <p className="mt-3 text-sm">Sign in or register using your configured identity provider.</p>
+          <Button className="mt-6 w-full" disabled={pending} onClick={() => void browserSignIn()}>
+            {pending ? <Spinner /> : <Globe />} Sign in / Register
+          </Button>
+          {(error || accountSignInError) && <p role="alert" className="mt-3 text-destructive">{error || accountSignInError}</p>}
+        </section>
+      </div>
+    )
+  }
+
   return (
     <div className="flex h-full justify-center overflow-y-auto bg-muted/50 p-8">
       <div className="my-auto w-full max-w-md shrink-0">

@@ -33,7 +33,7 @@ export function PairedPanel({
   const { t } = useTranslation()
   const node = pairing.connected!
   const workspaceRef = node.workspaceSlug || node.workspaceId
-  const base = workspaceWebBaseUrl(node.endpoint ?? undefined)
+  const base = workspaceWebBaseUrl()
   const browserUrl = workspaceRef ? `${base}/${workspaceRef}` : base
   // Handing the setup to the browser does not end the wizard by itself: the
   // browser takes a moment to come forward, and closing behind it drops the

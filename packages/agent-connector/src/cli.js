@@ -29,7 +29,9 @@ function parseArgs(argv) {
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a.startsWith('--')) {
+    if (a === '-h') {
+      setFlag('help', true);
+    } else if (a.startsWith('--')) {
       const eq = a.indexOf('=');
       if (eq > 0) {
         setFlag(a.slice(2, eq), a.slice(eq + 1));
@@ -1266,7 +1268,7 @@ Commands:
   status                      Show agent status
   list                        List configured agents
   create <name> [--type T]    Create a new agent
-    --description TEXT       Default published capability summary for new workspace memberships
+    [--description TEXT]     Default published capability summary for new workspace memberships
   remove <name>               Remove an agent
   start <name>                Start a single agent
   stop <name>                 Stop a single agent
@@ -1296,7 +1298,7 @@ Commands:
   mcp-server                  Start MCP server (stdio) for workspace tools
   update                      Upgrade launcher to the latest npm release
   version                     Show version
-  help                        Show this help
+  help, -h, --help             Show this help
 
 Options:
   --config <dir>              Config directory (default: ~/.openagents)

@@ -8,6 +8,7 @@ const path = require('path');
 const { AgentConnector } = require('../src/index');
 const { Daemon } = require('../src/daemon');
 const { workspaceSkillName } = require('../src/adapters/workspace-prompt');
+const { withCollaborationTurn } = require('../../agent-collaboration/src');
 
 const HOME_KEY = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
 const MODULE = require.resolve('../src/adapters/openclaw');
@@ -56,6 +57,8 @@ beforeEach(() => {
     const workspace = own || (sole ? config.agents.defaults.workspace : path.join(config.agents.defaults.workspace, agentId));
     const skillsDir = path.join(workspace, 'skills');
     const text = JSON.stringify({ state, configPath, model,
+      collaborationTrigger: process.env.OA_COLLABORATION_TRIGGER_ID,
+      collaborationChannel: process.env.OA_COLLABORATION_CHANNEL,
       key: provider?.apiKey || storedKey || process.env.OPENAI_API_KEY,
       workspace,
       skills: fs.existsSync(skillsDir) ? fs.readdirSync(skillsDir) : [],
@@ -92,6 +95,24 @@ async function run(instance) {
 }
 
 describe('OpenClaw launcher instance isolation', () => {
+  it('preserves per-turn collaboration context when creating its private runtime environment', async () => {
+    connector.addAgent({ name: 'deepseek', type: 'openclaw', env: deepseek });
+    const instance = adapter('deepseek');
+    const turns = await Promise.all(['first', 'second'].map((id) => withCollaborationTurn(
+      { triggerId: id, channel: `channel-${id}` }, async () => {
+        await new Promise(resolve => setImmediate(resolve));
+        return run(instance);
+      },
+    )));
+    for (const [i, id] of ['first', 'second'].entries()) {
+      assert.equal(turns[i].collaborationTrigger, id);
+      assert.equal(turns[i].collaborationChannel, `channel-${id}`);
+    }
+    const outside = await run(instance);
+    assert.equal(outside.collaborationTrigger, undefined);
+    assert.equal(outside.collaborationChannel, undefined);
+  });
+
   it('saving the second agent leaves the first agent key and model usable', async () => {
     connector.addAgent({ name: 'deepseek', type: 'openclaw', env: deepseek });
     const first = adapter('deepseek');

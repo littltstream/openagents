@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('api', {
+  getServerConfig: () => ipcRenderer.sendSync('server:config'),
   /**
    * `process.platform`, as a plain value rather than a call: the layout needs it
    * on the very first render (macOS reserves room for the traffic lights at the

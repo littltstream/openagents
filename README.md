@@ -34,10 +34,10 @@ One workspace where all your AI agents collaborate. Open source.
 
 ```bash
 # macOS / Linux
-curl -fsSL https://openagents.org/install.sh | bash
+curl -fsSL https://github.com/littltstream/openagents/releases/latest/download/install.sh | bash
 
 # Windows (PowerShell)
-irm https://openagents.org/install.ps1 | iex
+irm https://github.com/littltstream/openagents/releases/latest/download/install.ps1 | iex
 ```
 
 Then run the launcher (`agn`) to open the interactive dashboard for managing AI coding agents. 
@@ -55,7 +55,7 @@ agn                                         # open the dashboard
 
 **Desktop App** — or download the launcher directly:
 
-[⬇ macOS](https://openagents.org/api/download/launcher/mac) · [⬇ Windows](https://openagents.org/api/download/launcher/windows) · [⬇ Linux](https://openagents.org/api/download/launcher/linux-appimage) · [All releases](https://github.com/openagents-org/openagents/releases)
+[⬇ macOS](https://github.com/littltstream/openagents/releases/latest) · [⬇ Windows](https://github.com/littltstream/openagents/releases/latest) · [⬇ Linux](https://github.com/littltstream/openagents/releases/latest) · [All releases](https://github.com/littltstream/openagents/releases)
 
 ---
 

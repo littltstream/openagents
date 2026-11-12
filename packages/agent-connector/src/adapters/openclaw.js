@@ -22,6 +22,7 @@ const { execSync } = require('child_process');
 const { spawn } = require('../wsl');
 
 const BaseAdapter = require('./base');
+const { turnEnvironment } = require('../../../agent-collaboration/src');
 const { classifyRunFailure, classifiedError, isClassifiedError } = require('./run-failure');
 const { formatAttachmentsForPrompt } = require('./utils');
 const { buildOpenclawSkillMd, buildOpenclawSystemPrompt, workspaceSkillName } = require('./workspace-prompt');
@@ -115,7 +116,7 @@ class OpenClawAdapter extends BaseAdapter {
   constructor(opts) {
     super(opts);
     this.openclawAgentId = opts.openclawAgentId || 'main';
-    this.agentEnv = OpenClawAdapter.instanceEnv(this.agentName, this.agentEnv, opts.configDir);
+    this.agentEnv = turnEnvironment(OpenClawAdapter.instanceEnv(this.agentName, this.agentEnv, opts.configDir));
     this._openclawStateDir = this.agentEnv.OPENCLAW_STATE_DIR || OPENCLAW_STATE_DIR;
     // Rebuild from this instance's saved env on startup as well as on save:
     // older launchers persisted separate keys but overwrote one native config.

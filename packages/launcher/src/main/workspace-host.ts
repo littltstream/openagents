@@ -517,6 +517,9 @@ export class WorkspaceHost {
   }
 
   private _createEntry(id: string, baseUrl: string): ViewEntry {
+    // The user can change deployments between sign-ins. Rebind the embedded
+    // view's API bridge to the current server before loading its first page.
+    allowBundleApiAccess(apiBase(this._deps.endpoint()), webBase(this._deps.endpoint()))
     const view = createWorkspaceView({
       endpoint: this._deps.endpoint(),
       onExternalLogin: this._deps.onExternalLogin,

@@ -2417,6 +2417,13 @@ async def _handle_message_posted(event: Event, ctx: PipelineContext) -> Optional
         event.metadata["director_email"] = channel.director_email
 
     # ── Multi-agent channel: route per the thread's orchestration mode ──
+    from app.services.collaboration_delivery import delivered_collaboration_reply
+    delivery_id = delivered_collaboration_reply(db, workspace, event)
+    if delivery_id:
+        event.metadata['collaboration_delivery_event_id'] = delivery_id
+        event.metadata['target_agents'] = ['__no_response__']
+        return event
+
     real_participants = [
         p for p in (channel.participants or [])
         if p.agent_name != "__no_response__" and p.agent_name not in protected

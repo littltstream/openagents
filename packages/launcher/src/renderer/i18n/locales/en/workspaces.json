@@ -123,7 +123,7 @@
     },
     "howTo": {
       "title": "How do I get a pairing code?",
-      "step1": "1. Go to <1>workspace.openagents.org</1> and sign up or sign in",
+      "step1": "1. Go to <1>{{host}}</1> and sign up or sign in",
       "step2": "2. Create a workspace, open it and copy its pairing code"
     }
   },

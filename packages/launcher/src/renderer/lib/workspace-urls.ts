@@ -1,11 +1,19 @@
 import type { AccountWorkspace, Workspace } from "@renderer/types"
+import { DEPLOYMENT_DEFAULTS } from "../../shared/deployment"
 
-const DEFAULT_WORKSPACE_WEB_BASE_URL = "https://workspace.openagents.org"
+function serverConfig() {
+  return (typeof window !== "undefined" && window.api?.getServerConfig?.()) || DEPLOYMENT_DEFAULTS
+}
 
-/** Full workspace URL, including the access token when the workspace has one. */
+function apiEndpoint(endpoint?: string): string {
+  return (endpoint || serverConfig().workspaceEndpoint).replace(/\/+$/, "").replace(/\/v1$/, "")
+}
+
+/** Include a device token only when it belongs to the configured deployment. */
 export function workspaceUrl(ws: Workspace): string {
   const url = workspacePageUrl(ws)
-  return ws.token ? `${url}?token=${encodeURIComponent(ws.token)}` : url
+  return ws.token && apiEndpoint(ws.endpoint) === apiEndpoint()
+    ? `${url}?token=${encodeURIComponent(ws.token)}` : url
 }
 
 /**
@@ -14,12 +22,13 @@ export function workspaceUrl(ws: Workspace): string {
  * browser session is expected to already have (or prompt for) access.
  */
 export function workspacePageUrl(ws: Workspace): string {
-  return `${workspaceWebBaseUrl(ws.endpoint)}/${ws.slug || ws.id}`
+  return `${workspaceWebBaseUrl()}/${ws.slug || ws.id}`
 }
 
-export function workspaceWebBaseUrl(endpoint?: string): string {
-  const baseUrl = (endpoint || DEFAULT_WORKSPACE_WEB_BASE_URL).replace(/\/$/, "")
-  return baseUrl.replace("workspace-endpoint", "workspace").replace(/\/v1$/, "")
+export function workspaceWebBaseUrl(): string {
+  // Saved endpoints identify the Agent API, including old deployments. Every
+  // browser entry uses the frontend selected in Settings, independently of it.
+  return serverConfig().workspaceWebUrl.replace(/\/+$/, "")
 }
 
 /**
@@ -60,14 +69,14 @@ export function inAppBlocker(
   memberOf: AccountWorkspace[] | null,
 ): InAppBlocker | null {
   if (!signedIn) return "signedOut"
-  if (workspaceWebBaseUrl(ws.endpoint) !== workspaceWebBaseUrl(configuredEndpoint)) return "otherDeployment"
+  if (apiEndpoint(ws.endpoint) !== apiEndpoint(configuredEndpoint)) return "otherDeployment"
   if (!memberOf) return "unknown"
   const member = memberOf.some((m) => m.workspaceId === ws.id || (!!ws.slug && m.slug === ws.slug))
   return member ? null : "notMember"
 }
 
-export function workspaceDisplayHost(endpoint?: string): string {
-  const baseUrl = workspaceWebBaseUrl(endpoint)
+export function workspaceDisplayHost(): string {
+  const baseUrl = workspaceWebBaseUrl()
   try {
     return new URL(baseUrl).host
   } catch {

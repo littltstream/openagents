@@ -4,6 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { WorkspaceQuickConnect } from "./WorkspaceQuickConnect"
+import { DEPLOYMENT_DEFAULTS } from "../../../shared/deployment"
 
 vi.mock("../../lib/analytics", () => ({ capture: vi.fn(), group: vi.fn() }))
 
@@ -53,7 +54,7 @@ describe("WorkspaceQuickConnect — pairing only", () => {
     // Creation is web-only; the form says where to get a code instead.
     expect(screen.getByText(/how do i get a pairing code/i)).toBeInTheDocument()
     expect(
-      screen.getByRole("button", { name: "workspace.openagents.org" }),
+      screen.getByRole("button", { name: new URL(DEPLOYMENT_DEFAULTS.workspaceWebUrl).host }),
     ).toBeInTheDocument()
     // The manual link/token path is gone, not demoted.
     expect(screen.queryByTestId("qc-manual-toggle")).not.toBeInTheDocument()

@@ -273,17 +273,21 @@ def agent_shared_context(
     then prepends the shared instructions + allowed knowledge to the prompt
     and tells the agent to stay inside them.
     """
-    from app.services.visibility import is_machine_caller
+    from app.access import repeats_machine_token, resolve_machine_token
 
     workspace = _resolve_workspace(db, network)
     if not workspace:
         return json_response(ResponseCode.NOT_FOUND, "Network not found")
-    if not is_machine_caller(workspace, x_workspace_token):
-        return json_response(ResponseCode.FORBIDDEN, "shared-context is for the agent runtime (workspace token) only")
+    runtime_workspace, node = resolve_machine_token(db, x_workspace_token)
+    if (runtime_workspace is None or runtime_workspace.id != workspace.id
+            or (authorization and not repeats_machine_token(x_workspace_token, authorization))):
+        return json_response(ResponseCode.FORBIDDEN, "shared-context requires this workspace's runtime credential")
 
     member = _load_member(db, workspace, agent)
     if member is None:
         return json_response(ResponseCode.NOT_FOUND, "Agent not found")
+    if node is not None and (member.node_id != node.id or _norm(member.owner_email) != _norm(node.owner_email)):
+        return json_response(ResponseCode.FORBIDDEN, "Agent does not belong to this runtime")
 
     owner = _norm(member.owner_email)
     requester = _norm(requester_email)

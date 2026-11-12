@@ -89,17 +89,9 @@ export interface UpdaterState {
 // Where the download-page fallback points, per OS/arch. Linux has no dedicated
 // endpoint yet, so it keeps the GitHub Releases page.
 const GITHUB_RELEASES_URL =
-  "https://github.com/openagents-org/openagents/releases"
+  "https://github.com/littltstream/openagents/releases"
 
 function resolveDownloadUrl(): string {
-  if (process.platform === "win32") {
-    return "https://openagents.org/api/download/launcher/windows"
-  }
-  if (process.platform === "darwin") {
-    return process.arch === "arm64"
-      ? "https://openagents.org/api/download/launcher/mac"
-      : "https://openagents.org/api/download/launcher/mac-intel"
-  }
   return GITHUB_RELEASES_URL
 }
 
