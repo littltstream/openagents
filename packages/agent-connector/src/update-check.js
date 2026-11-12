@@ -35,6 +35,17 @@ function compareSemver(a, b) {
   return 0;
 }
 
+function compareForkVersions(a, b) {
+  const parse = value => {
+    const match = /^(\d+)\.(\d+)\.(\d+)-chippilot\.(\d+)$/.exec(value);
+    if (!match) throw new Error('Invalid ChipPilot CLI version');
+    return match.slice(1).map(Number);
+  };
+  const left = parse(a), right = parse(b);
+  for (let i = 0; i < left.length; i++) if (left[i] !== right[i]) return Math.sign(left[i] - right[i]);
+  return 0;
+}
+
 function loadCache() {
   try {
     const data = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'));
@@ -100,7 +111,7 @@ async function checkForUpdate() {
     if (!response.ok) throw new Error(`Release check failed: HTTP ${response.status}`);
     const release = await response.json();
     if (typeof release.cliVersion !== 'string' || release.repository !== fork.repository) throw new Error('Invalid ChipPilot release manifest');
-    return { current: currentVersion(), latest: release.cliVersion, isNewer: compareSemver(release.cliVersion, currentVersion()) > 0 };
+    return { current: currentVersion(), latest: release.cliVersion, isNewer: compareForkVersions(release.cliVersion, currentVersion()) > 0 };
   }
   const current = currentVersion();
   let latest = loadCache();
@@ -212,7 +223,9 @@ function runUpdate(opts = {}) {
   if (require('../package.json').chippilot) {
     const installer = path.resolve(__dirname, '../installers', process.platform === 'win32' ? 'install.ps1' : 'install.sh');
     const result = spawnSync(process.platform === 'win32' ? 'powershell.exe' : 'bash',
-      process.platform === 'win32' ? ['-NoProfile', '-File', installer] : [installer], { stdio: 'inherit' });
+      process.platform === 'win32' ? ['-NoProfile', '-File', installer] : [installer], {
+        stdio: 'inherit', env: { ...process.env, CHIPPILOT_INSTALL_ROOT: path.dirname(isolatedRuntimeDir() || path.join(os.homedir(), '.openagents/nodejs')) },
+      });
     if (result.error) throw result.error;
     return result.status === 0;
   }
@@ -317,6 +330,7 @@ async function notifyAndMaybeUpdate() {
 }
 
 module.exports = {
+  compareForkVersions,
   checkForUpdate,
   notifyAndMaybeUpdate,
   runUpdate,
