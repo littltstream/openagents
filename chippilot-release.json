@@ -1,8 +1,8 @@
 {
   "repository": "littltstream/openagents",
-  "tag": "chippilot-v1.1.14.3",
-  "desktopVersion": "1.1.14-chippilot.3",
-  "cliVersion": "0.2.226-chippilot.3",
+  "tag": "chippilot-v1.1.14.4",
+  "desktopVersion": "1.1.14-chippilot.4",
+  "cliVersion": "0.2.226-chippilot.4",
   "defaultApiUrl": "https://api.chippilot.cn",
   "defaultWebUrl": "https://openagents.chippilot.cn",
   "defaultOidcIssuer": "https://auth.chippilot.cn/realms/openagents",

@@ -2109,7 +2109,10 @@ function setupIPC(): void {
     }
   })
 
-  ipcMain.handle("settings:get-all", () => store.get())
+  ipcMain.handle("settings:get-all", () => ({
+    ...(store.get() as Record<string, unknown>),
+    ...configuredDeployment(),
+  }))
   ipcMain.handle("settings:export", () => {
     return JSON.stringify(store.get(), null, 2)
   })
@@ -2679,7 +2682,7 @@ function setupIPC(): void {
       const server = configuredDeployment()
       return { issuer: server.oidcIssuerUrl, clientId: server.oidcClientId, apiUrl: server.workspaceEndpoint }
     },
-    endpoint: () => normalizeWorkspaceEndpoint(store.get("workspaceEndpoint")),
+    endpoint: () => configuredDeployment().workspaceEndpoint,
     getWindow: () => mainWindow,
     // Both run only for "Connect this computer" in the workspace, which asks
     // for this device to come online — so they turn the local connector on.

@@ -6,6 +6,11 @@ describe('self-hosted deployment settings', () => {
     expect(resolveDeployment(() => undefined)).toEqual(DEPLOYMENT_DEFAULTS)
     expect(DEPLOYMENT_DEFAULTS.updateFeedUrl).toContain('littltstream/openagents')
   })
+  it('resolves an old profile with an empty endpoint to the same effective server used by the embedded view', () => {
+    const values: Record<string, string> = { workspaceEndpoint: '' }
+    expect(resolveDeployment(k => values[k]).workspaceEndpoint).toBe(DEPLOYMENT_DEFAULTS.workspaceEndpoint)
+    expect(resolveDeployment(k => values[k]).workspaceWebUrl).toBe(DEPLOYMENT_DEFAULTS.workspaceWebUrl)
+  })
   it('keeps independently configured API, website and realm paths', () => {
     const values: Record<string, string> = { workspaceEndpoint: 'https://api.example.com/v1-api/', workspaceWebUrl: 'https://app.example.com/', oidcIssuerUrl: 'https://login.example.com/realms/team/' }
     const resolved = resolveDeployment(k => values[k])
