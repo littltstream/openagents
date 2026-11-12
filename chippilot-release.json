@@ -3,6 +3,7 @@
   "tag": "chippilot-v1.1.14.2",
   "desktopVersion": "1.1.14-chippilot.2",
   "cliVersion": "0.2.226-chippilot.2",
+  "macArm64BuildHost": "macos-15-intel",
   "defaultApiUrl": "https://api.chippilot.cn",
   "defaultWebUrl": "https://openagents.chippilot.cn",
   "defaultOidcIssuer": "https://auth.chippilot.cn/realms/openagents",
