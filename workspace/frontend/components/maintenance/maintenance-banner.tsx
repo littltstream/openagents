@@ -1,4 +1,6 @@
 'use client';
+import { scopedSessionStorage } from '@/lib/scoped-storage';
+
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Wrench, X } from 'lucide-react';
@@ -61,7 +63,7 @@ export function MaintenanceBanner() {
     tick();
     const id = window.setInterval(tick, 30_000);
     try {
-      setDismissed(sessionStorage.getItem(storageKey) === '1');
+      setDismissed(scopedSessionStorage.getItem(storageKey) === '1');
     } catch {}
     return () => window.clearInterval(id);
   }, [storageKey]);
@@ -103,7 +105,7 @@ export function MaintenanceBanner() {
   const dismiss = () => {
     setDismissed(true);
     try {
-      sessionStorage.setItem(storageKey, '1');
+      scopedSessionStorage.setItem(storageKey, '1');
     } catch {}
   };
 

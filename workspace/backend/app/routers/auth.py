@@ -25,12 +25,14 @@ proof is required here — the same token would be honoured by Firebase itself.
 """
 
 import logging
+import threading
+import time
 from datetime import datetime, timezone
 
 from typing import Optional
 
 from fastapi import APIRouter, Header
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.firebase_auth import (
     exchange_custom_token,
@@ -38,12 +40,51 @@ from app.firebase_auth import (
     mint_workspace_session,
     renew_workspace_session,
     workspace_session_enabled,
+    verify_identity_claims,
 )
+from app.config import config
+from app.services import oidc_password_email
 from app.response import ResponseCode, json_response, success_response
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/auth", tags=["Auth"])
+
+_password_email_lock = threading.Lock()
+_password_email_cooldowns = {}
+
+
+class PasswordResetEmailRequest(BaseModel):
+    # The recipient is always the signed-in subject, never a caller-supplied ID.
+    model_config = ConfigDict(extra='forbid')
+
+
+@router.post('/password-reset-email')
+def request_password_reset_email(body: PasswordResetEmailRequest, authorization: Optional[str] = Header(None)):
+    if config.AUTH_MODE != 'oidc':
+        return json_response(ResponseCode.NOT_FOUND, 'Password reset email is not available')
+    token = authorization[7:] if authorization and authorization.startswith('Bearer ') else ''
+    claims = verify_identity_claims(token) if token else None
+    if not claims or claims.get('provider') != 'oidc' or not claims.get('oidc_sub'):
+        return json_response(ResponseCode.UNAUTHORIZED, 'Sign in to request a password reset email')
+    subject = claims['oidc_sub']
+    key = (claims['oidc_issuer'], subject)
+    now = time.monotonic()
+    with _password_email_lock:
+        for expired in [key for key, until in _password_email_cooldowns.items() if until <= now]:
+            del _password_email_cooldowns[expired]
+        if key in _password_email_cooldowns:
+            return json_response(ResponseCode.BAD_REQUEST, 'Please wait one minute before requesting another email', status_code=429)
+        _password_email_cooldowns[key] = now + 60
+    try:
+        oidc_password_email.send_password_reset_email(subject)
+    except (oidc_password_email.PasswordEmailDenied, oidc_password_email.PasswordEmailUnavailable) as error:
+        with _password_email_lock:
+            _password_email_cooldowns.pop(key, None)
+        if isinstance(error, oidc_password_email.PasswordEmailDenied):
+            return json_response(ResponseCode.FORBIDDEN, str(error))
+        return json_response(ResponseCode.INTERNAL_ERROR, str(error), status_code=503)
+    return success_response({'emailSent': True, 'expiresIn': oidc_password_email.PASSWORD_LINK_SECONDS})
 
 
 class SessionRequest(BaseModel):

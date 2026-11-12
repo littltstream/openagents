@@ -285,21 +285,28 @@ class TestTeamApi:
         r = client.delete(f"/v1/workspaces/{wid}/team/al@x.com", headers=_auth("al"))
         assert r.status_code == 400
 
-    def test_self_join_via_token_link(self, client, monkeypatch):
+    def test_shared_token_does_not_enroll_nonmember_identity(self, client, monkeypatch):
         _stub_identity(monkeypatch, {"bob": _claims("bob@x.com")})
-        # Anonymous workspace with a token (a shared ?token= link).
+        # A signed-in person's membership is authoritative over a shared token.
         data = client.post("/v1/workspaces", json={"name": "WS", "creator_email": "a@x.com"}).json()["data"]
         wid, tok = data["workspaceId"], data["token"]
-        # Logged-in bob arrives via the token link → self-join.
         r = client.post(
             f"/v1/workspaces/{wid}/team/self",
             headers={**_auth("bob"), "X-Workspace-Token": tok},
         )
-        assert r.status_code == 200
-        assert r.json()["data"] == {"email": "bob@x.com", "role": "member"}
-        # Now shows up on bob's Membership Home.
+        assert r.status_code == 401
         mine = client.get("/v1/account/workspaces", headers=_auth("bob")).json()["data"]
-        assert any(w["workspaceId"] == wid for w in mine)
+        assert not any(w["workspaceId"] == wid for w in mine)
+        assert client.get(f"/v1/workspaces/{wid}", headers=_auth("bob")).status_code == 401
+
+    def test_self_join_preserves_existing_role(self, client, monkeypatch):
+        _stub_identity(monkeypatch, {"al": _claims("al@x.com"), "bob": _claims("bob@x.com")})
+        data = client.post("/v1/workspaces", json={"name": "WS"}, headers=_auth("al")).json()["data"]
+        wid = data["workspaceId"]
+        assert client.post(f"/v1/workspaces/{wid}/team", json={"email": "bob@x.com", "role": "viewer"}, headers=_auth("al")).status_code == 200
+        r = client.post(f"/v1/workspaces/{wid}/team/self", headers={**_auth("bob"), "X-Workspace-Token": data["token"]})
+        assert r.status_code == 200
+        assert r.json()["data"] == {"email": "bob@x.com", "role": "viewer"}
 
 
 class TestProfile:
@@ -421,6 +428,26 @@ class TestInvites:
         ids.update(extra_ids or {})
         _stub_identity(monkeypatch, ids)
         return client.post("/v1/workspaces", json={"name": "WS"}, headers=_auth("al")).json()["data"]["workspaceId"]
+
+    def test_invite_links_and_email_use_the_configured_frontend(self, client, monkeypatch):
+        from app.config import config
+        from app.services import email
+        monkeypatch.setattr(config, 'FRONTEND_BASE_URL', 'https://workspace.example.test:3000')
+        delivered = []
+        def send(**kwargs):
+            delivered.append(kwargs)
+            return True
+        monkeypatch.setattr(email, 'send_invite_email', send)
+        wid = self._ws(client, monkeypatch)
+        response = client.post(f'/v1/workspaces/{wid}/invites',
+                               json={'email': 'bob@example.test'}, headers=_auth('al'))
+        assert response.status_code == 200
+        invite = response.json()['data']
+        assert invite['url'].startswith('https://workspace.example.test:3000/invite/')
+        assert invite['emailSent'] is True
+        assert delivered[0]['invite_url'] == invite['url']
+        listing = client.get(f'/v1/workspaces/{wid}/invites', headers=_auth('al')).json()['data']
+        assert listing[0]['url'] == invite['url']
 
     def test_email_invite_lifecycle(self, client, monkeypatch):
         wid = self._ws(client, monkeypatch, {"bob": _claims("bob@x.com")})

@@ -1,4 +1,6 @@
 'use client';
+import { appPath } from '@/lib/app-path';
+
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -44,8 +46,8 @@ function writeLocaleCookie(locale: Locale | null) {
   if (typeof document === 'undefined') return;
   const secure = window.location.protocol === 'https:' ? '; Secure' : '';
   document.cookie = locale
-    ? `${LOCALE_COOKIE}=${locale}; Path=/; Max-Age=${LOCALE_COOKIE_MAX_AGE}; SameSite=Lax${secure}`
-    : `${LOCALE_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax${secure}`;
+    ? `${LOCALE_COOKIE}=${locale}; Path=${appPath('/')}; Max-Age=${LOCALE_COOKIE_MAX_AGE}; SameSite=Lax${secure}`
+    : `${LOCALE_COOKIE}=; Path=${appPath('/')}; Max-Age=0; SameSite=Lax${secure}`;
 }
 
 export function I18nProvider({

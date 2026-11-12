@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { OnboardingPairingPanel } from './onboarding-pairing-panel';
 import { I18nProvider } from '@/lib/i18n';
+import { getDirectApiBaseUrl } from '@/lib/api-base';
 
 let root: Root;
 let container: HTMLDivElement;
@@ -20,7 +21,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await act(async () => root.unmount()); container.remove();
-  copy.mockClear(); vi.useRealTimers(); vi.unstubAllGlobals();
+  copy.mockClear(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs();
 });
 async function render(value = pairing, extra: Partial<React.ComponentProps<typeof OnboardingPairingPanel>> = {}) {
   await act(async () => root.render(React.createElement(I18nProvider, { initialLocale: 'en-US', hasStoredLocale: true, children: React.createElement(OnboardingPairingPanel, { pairing: value, ...extra }) })));
@@ -47,12 +48,21 @@ it('starts with command-line setup and switches the install command for Windows'
   expect(copy).toHaveBeenCalledWith('TEST-CODE');
   expect(container.querySelectorAll('a')).toHaveLength(0);
   expect([...container.querySelectorAll('code')].map(c => c.textContent)).toEqual([
-    'curl -fsSL https://openagents.org/install.sh | bash', 'agn device connect TEST-CODE',
+    'curl -fsSL https://openagents.org/install.sh | bash', `agn device connect TEST-CODE --endpoint "${getDirectApiBaseUrl()}"`,
   ]);
   await act(async () => button('Windows').click());
   expect(container.querySelector('code')?.textContent).toBe('irm https://openagents.org/install.ps1 | iex');
   await act(async () => button('Desktop app').click());
   expect(container.querySelectorAll('a')).toHaveLength(3);
+});
+it('copies a pairing command for this self-hosted backend', async () => {
+  vi.stubEnv('NEXT_PUBLIC_API_URL', 'https://api.chippilot.cn/');
+  await render();
+  const command = 'agn device connect TEST-CODE --endpoint "https://api.chippilot.cn"';
+  expect([...container.querySelectorAll('code')].map(c => c.textContent)).toContain(command);
+  const copies = container.querySelectorAll<HTMLButtonElement>('button[aria-label="Copy command"]');
+  await act(async () => copies[1].click());
+  expect(copy).toHaveBeenCalledWith(command);
 });
 it('stops offering an expired pairing code on both setup paths', async () => {
   await render();

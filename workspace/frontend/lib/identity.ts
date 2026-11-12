@@ -1,9 +1,11 @@
-const USER_ID_COOKIE = 'oa_user_id';
-const USER_NAME_COOKIE = 'oa_user_name';
+import { scopedCookieName } from '@/lib/scoped-storage';
+import { appPath } from '@/lib/app-path';
+const USER_ID_COOKIE = scopedCookieName('oa_user_id');
+const USER_NAME_COOKIE = scopedCookieName('oa_user_name');
 const MAX_AGE = 365 * 24 * 60 * 60; // 1 year in seconds
 
 function setCookie(name: string, value: string) {
-  document.cookie = `${name}=${encodeURIComponent(value)};path=/;max-age=${MAX_AGE};SameSite=Lax`;
+  document.cookie = `${name}=${encodeURIComponent(value)};path=${appPath('/')};max-age=${MAX_AGE};SameSite=Lax`;
 }
 
 function getCookie(name: string): string | null {

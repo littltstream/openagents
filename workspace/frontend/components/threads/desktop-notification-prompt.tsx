@@ -1,4 +1,6 @@
 'use client';
+import { scopedLocalStorage } from '@/lib/scoped-storage';
+
 
 import { useEffect, useState } from 'react';
 import { BellRing, X } from 'lucide-react';
@@ -27,7 +29,7 @@ export function DesktopNotificationPrompt() {
   useEffect(() => {
     setPermission(currentPermission());
     try {
-      setDismissed(localStorage.getItem(NOTIFICATION_PROMPT_DISMISSED_KEY) === '1');
+      setDismissed(scopedLocalStorage.getItem(NOTIFICATION_PROMPT_DISMISSED_KEY) === '1');
     } catch {
       setDismissed(false);
     }
@@ -48,7 +50,7 @@ export function DesktopNotificationPrompt() {
 
   const dismiss = () => {
     setDismissed(true);
-    try { localStorage.setItem(NOTIFICATION_PROMPT_DISMISSED_KEY, '1'); } catch {}
+    try { scopedLocalStorage.setItem(NOTIFICATION_PROMPT_DISMISSED_KEY, '1'); } catch {}
   };
 
   const enable = async () => {

@@ -1,0 +1,70 @@
+# Production deployment. Start with ./compose.sh; persistent volumes are external.
+services:
+  db:
+    container_name: openagents-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${WORKSPACE_DB_PASSWORD:?Set WORKSPACE_DB_PASSWORD}
+    ports: !override ["127.0.0.1:5432:5432"]
+  keycloak-db:
+    container_name: openagents-keycloak-db
+  keycloak:
+    container_name: openagents-keycloak
+    ports: !reset []
+  backend:
+    container_name: openagents-backend
+    image: openagents-backend:latest
+    entrypoint: []
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://postgres:${WORKSPACE_DB_PASSWORD}@db:5432/openagents_workspace
+      NO_PROXY: localhost,127.0.0.1,keycloak,db,keycloak-db
+      WEB_CONCURRENCY: "1"
+      CORS_ORIGINS: "https://openagents.chippilot.icu,https://101.43.200.65:3000,https://openagents.chippilot.icu:3000"
+      ANALYTICS_ENABLED: "false"
+      FILE_STORAGE_PATH: /var/lib/openagents/files
+    ports: !reset []
+    volumes:
+      - workspace_files:/var/lib/openagents/files
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+  frontend:
+    container_name: openagents-frontend
+    image: openagents-frontend:latest
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_BASE_PATH: ""
+        NEXT_PUBLIC_OPENAGENTS_API_URL: ${WORKSPACE_API_URL}
+        NEXT_PUBLIC_FIRST_PARTY_HOSTNAMES: "101.43.200.65,openagents.chippilot.icu"
+    ports: !reset []
+  domain-proxy:
+    container_name: openagents-domain-proxy
+    image: nginx:alpine
+    restart: unless-stopped
+    ports: ["443:443"]
+    volumes:
+      - /home/weizhiyi/openagents-runtime/domain-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /home/weizhiyi/openagents-runtime/domain-tls:/etc/nginx/domain-tls:ro
+    depends_on: [frontend, backend, keycloak]
+  port-proxy:
+    container_name: openagents-proxy
+    image: nginx:alpine
+    restart: unless-stopped
+    ports: ["3000:3000", "8000:8000", "9443:9443"]
+    volumes:
+      - /home/weizhiyi/openagents-runtime/port-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /home/weizhiyi/openagents-runtime/port-tls:/etc/nginx/port-tls:ro
+      - /home/weizhiyi/openagents-runtime/domain-tls:/etc/nginx/domain-tls:ro
+    depends_on: [frontend, backend, keycloak]
+volumes:
+  pgdata:
+    external: true
+    name: openagents-auth_pgdata
+  keycloak_pgdata:
+    external: true
+    name: openagents-auth_keycloak_pgdata
+  workspace_files:
+    external: true
+    name: openagents-auth_workspace_files

@@ -1,3 +1,4 @@
+import { scopedSessionStorage } from '@/lib/scoped-storage';
 declare global {
   interface Window {
     posthog?: {
@@ -18,8 +19,8 @@ function baseProps(): Record<string, unknown> {
   if (typeof window === 'undefined') return {};
   try {
     const fromUrl = new URLSearchParams(window.location.search).get('src');
-    if (fromUrl) sessionStorage.setItem(SRC_KEY, fromUrl);
-    const src = sessionStorage.getItem(SRC_KEY);
+    if (fromUrl) scopedSessionStorage.setItem(SRC_KEY, fromUrl);
+    const src = scopedSessionStorage.getItem(SRC_KEY);
     return {
       is_mobile: window.innerWidth < 1024,
       ...(src ? { acq_src: src } : {}),

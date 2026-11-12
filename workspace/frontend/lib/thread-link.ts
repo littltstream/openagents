@@ -1,4 +1,5 @@
 import { dmPair } from './dm';
+import { appPath, stripAppPath } from './app-path';
 
 export const isOpaqueThreadId = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
@@ -8,7 +9,7 @@ export function threadPath(workspace: string, thread: string): string {
 
 /** A navigational link carries no workspace token and grants no access. */
 export function threadLink(origin: string, workspace: string, thread: string): string {
-  return new URL(threadPath(workspace, thread), origin).toString();
+  return new URL(appPath(threadPath(workspace, thread)), origin).toString();
 }
 
 export function messagePath(workspace: string, thread: string, message: string): string {
@@ -16,13 +17,13 @@ export function messagePath(workspace: string, thread: string, message: string):
 }
 
 export function messageLink(origin: string, workspace: string, thread: string, message: string): string {
-  return new URL(messagePath(workspace, thread, message), origin).toString();
+  return new URL(appPath(messagePath(workspace, thread, message)), origin).toString();
 }
 
 export function requestedMessageId(location: string): string | null {
   try {
     const url = new URL(location, 'https://workspace.invalid');
-    const match = url.pathname.match(/^\/[^/]+\/threads\/[^/]+\/messages\/([^/]+)\/?$/);
+    const match = stripAppPath(url.pathname).match(/^\/[^/]+\/threads\/[^/]+\/messages\/([^/]+)\/?$/);
     const value = match ? decodeURIComponent(match[1]) : url.searchParams.get('message');
     return value && value.length <= 256 ? value : null;
   } catch { return null; }
@@ -37,7 +38,7 @@ export function workspaceThreadLink(
   try {
     const url = new URL(href);
     if (!origins.includes(url.origin)) return null;
-    const match = url.pathname.match(/^\/([^/]+)\/threads\/([^/]+)(?:\/messages\/([^/]+))?\/?$/);
+    const match = stripAppPath(url.pathname).match(/^\/([^/]+)\/threads\/([^/]+)(?:\/messages\/([^/]+))?\/?$/);
     if (!match || !workspaces.includes(decodeURIComponent(match[1]))) return null;
     return { thread: decodeURIComponent(match[2]), message: match[3] ? decodeURIComponent(match[3]) : null };
   } catch { return null; }
@@ -47,7 +48,7 @@ export function workspaceThreadLink(
 export function requestedThreadId(location: string): string | null {
   try {
     const url = new URL(location, 'https://workspace.invalid');
-    const match = url.pathname.match(/^\/[^/]+\/threads\/([^/]+)(?:\/messages\/[^/]+)?\/?$/);
+    const match = stripAppPath(url.pathname).match(/^\/[^/]+\/threads\/([^/]+)(?:\/messages\/[^/]+)?\/?$/);
     if (match) return decodeURIComponent(match[1]);
     return url.searchParams.get('thread');
   } catch { return null; }

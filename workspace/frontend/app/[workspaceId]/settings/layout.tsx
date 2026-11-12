@@ -1,4 +1,6 @@
 'use client';
+import { scopedCookieName } from '@/lib/scoped-storage';
+
 
 import { use, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
@@ -19,10 +21,10 @@ import { useT } from '@/lib/i18n';
  * setWorkspaceCookie in app/[workspaceId]/page.tsx). */
 function readCookieToken(workspaceId: string): string | null {
   if (typeof document === 'undefined') return null;
-  const raw = document.cookie.split('; ').find((c) => c.startsWith('oa_workspace='));
+  const raw = document.cookie.split('; ').find((c) => c.startsWith((scopedCookieName('oa_workspace') + '=')));
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(decodeURIComponent(raw.slice('oa_workspace='.length)));
+    const parsed = JSON.parse(decodeURIComponent(raw.slice((scopedCookieName('oa_workspace') + '=').length)));
     if (parsed?.slug === workspaceId && typeof parsed.token === 'string') return parsed.token;
   } catch { /* malformed cookie */ }
   return null;

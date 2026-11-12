@@ -1,4 +1,6 @@
 'use client';
+import { appPath } from '@/lib/app-path';
+
 
 import { useState } from 'react';
 import { useOpenAgentsAuth } from '@/lib/openagents-auth-context';
@@ -46,7 +48,7 @@ export function WorkspaceLoadError({ status, onRetry }: {
       </button>}
       {!notFound && <button type="button" onClick={onRetry} disabled={signingIn}
         className="rounded-md border px-4 py-2 text-sm font-medium disabled:opacity-50">{t('common.retry')}</button>}
-      <a href="/" className="rounded-md border px-4 py-2 text-sm font-medium">{t('workspaceGate.goHome')}</a>
+      <a href={appPath('/')} className="rounded-md border px-4 py-2 text-sm font-medium">{t('workspaceGate.goHome')}</a>
     </div>
   </div>;
 }

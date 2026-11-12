@@ -1,4 +1,6 @@
 'use client';
+import { scopedLocalStorage } from '@/lib/scoped-storage';
+
 
 import { useEffect, useState } from 'react';
 import { Play } from 'lucide-react';
@@ -33,14 +35,14 @@ export function FeatureTourBanner({ feature, compact = false }: { feature: TourF
 
   useEffect(() => {
     let forever = false;
-    try { forever = localStorage.getItem(bannerKey(feature)) === '1'; } catch {}
+    try { forever = scopedLocalStorage.getItem(bannerKey(feature)) === '1'; } catch {}
     setDismissed(forever || hiddenThisSession.has(feature));
     setMounted(true);
   }, [feature]);
 
   const dismiss = (scope: TourDismissScope) => {
     if (scope === 'forever') {
-      try { localStorage.setItem(bannerKey(feature), '1'); } catch {}
+      try { scopedLocalStorage.setItem(bannerKey(feature), '1'); } catch {}
     } else {
       hiddenThisSession.add(feature);
     }

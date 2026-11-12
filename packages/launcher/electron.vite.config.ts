@@ -22,6 +22,10 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()]
   },
   renderer: {
+    define: {
+      // The launcher owns its local origin and has no web deployment subpath.
+      'process.env.NEXT_PUBLIC_BASE_PATH': JSON.stringify('')
+    },
     resolve: {
       dedupe: ['react', 'react-dom', 'sonner', 'radix-ui'],
       alias: {

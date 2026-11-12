@@ -1,0 +1,11 @@
+{
+  "host": "smtp.qq.com",
+  "port": "465",
+  "from": "",
+  "fromDisplayName": "OpenAgents",
+  "auth": "true",
+  "user": "",
+  "password": "",
+  "ssl": "true",
+  "starttls": "false"
+}

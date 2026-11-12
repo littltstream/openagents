@@ -1,12 +1,19 @@
 'use client';
+import { scopedSessionStorage } from '@/lib/scoped-storage';
+
+import { appPath } from '@/lib/app-path';
+
 
 import { desktopHost } from '@/lib/desktop-host';
+import { allowsOidcRegistration, usesInlineLogin, usesOidcLogin } from '@/lib/auth-mode';
+import { changePasswordWithOidc, registerWithOidc } from '@/lib/oidc';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
+import { toast } from 'sonner';
 import {
-  Plus, LogOut, Clock, Loader2,
+  Plus, LogOut, Clock, Loader2, KeyRound,
   Copy, Check, ArrowRight,
   Network, Zap, Shield, MonitorSmartphone,
 } from 'lucide-react';
@@ -72,8 +79,8 @@ function LandingPage() {
       <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-sm">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <Image src="/logo-icon.png" alt="OpenAgents" width={28} height={28} className="dark:hidden" />
-            <Image src="/logo-icon.png" alt="OpenAgents" width={28} height={28} className="hidden dark:block" />
+            <Image src={appPath('/logo-icon.png')} alt="OpenAgents" width={28} height={28} className="dark:hidden" />
+            <Image src={appPath('/logo-icon.png')} alt="OpenAgents" width={28} height={28} className="hidden dark:block" />
             <span className="font-semibold text-lg">OpenAgents</span>
           </div>
           <div className="flex items-center gap-3">
@@ -302,7 +309,7 @@ function LandingPage() {
       <footer className="border-t py-8">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
           <div className="flex items-center gap-2">
-            <Image src="/logo-icon.png" alt="OpenAgents" width={20} height={20} />
+            <Image src={appPath('/logo-icon.png')} alt="OpenAgents" width={20} height={20} />
             <span>OpenAgents</span>
           </div>
           <div className="flex items-center gap-4">
@@ -743,6 +750,7 @@ function MembershipHome({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ErrorMessage | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [sendingPasswordEmail, setSendingPasswordEmail] = useState(false);
   const [newName, setNewName] = useState('');
 
   const viewTrackedRef = useRef(false);
@@ -829,10 +837,11 @@ function MembershipHome({
   const firstWorkspace =
     !loading && workspaces.length === 1 && workspaces[0].role === 'owner' ? workspaces[0] : null;
 
-  // Single-workspace users go STRAIGHT IN — no picker, no "this is your first
+  // Self-hosted OIDC accounts always see the picker, even with one workspace.
+  // Single-workspace users on the hosted app go STRAIGHT IN — no picker, no "this is your first
   // workspace" card. A list with one option is pure friction (especially on a
   // phone). See lib/first-workspace for the once-per-session rule.
-  const willAutoEnter = !loading && autoEnterTarget(workspaces) !== null;
+  const willAutoEnter = !usesOidcLogin() && !loading && autoEnterTarget(workspaces) !== null;
   const autoEnteredRef = useRef(false);
   // Re-renders once the redirect is out, so willAutoEnter (now false) stops
   // holding the skeleton. In the desktop app the push opens the workspace in
@@ -873,7 +882,7 @@ function MembershipHome({
     // Also end the central openagents.org session — otherwise the login
     // redirect immediately re-authenticates and bounces back here. On localhost
     // there's no central login, so just fall through to the inline sign-in gate.
-    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && !desktopHost()) {
+    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && !desktopHost() && !usesInlineLogin()) {
       window.location.href = 'https://openagents.org/logout';
     }
   };
@@ -918,7 +927,7 @@ function MembershipHome({
             className="flex items-center gap-2.5 rounded-md transition-transform hover:-translate-y-0.5 focus:outline-none"
             title={t('dashboard.backToHome')}
           >
-            <Image src="/logo-icon.png" alt="OpenAgents" width={26} height={26} />
+            <Image src={appPath('/logo-icon.png')} alt="OpenAgents" width={26} height={26} />
             <span className="text-lg font-extrabold tracking-tight">OpenAgents</span>
           </a>
           <div className="flex items-center gap-3">
@@ -931,6 +940,20 @@ function MembershipHome({
               </div>
               <span className="text-sm text-neutral-600 hidden sm:inline">{userEmail}</span>
             </div>
+            {usesOidcLogin() && <button
+                disabled={sendingPasswordEmail}
+                onClick={() => {
+                  setSendingPasswordEmail(true);
+                  void changePasswordWithOidc().then(() => toast.success(t('auth.passwordEmailSent')))
+                    .catch((error: unknown) => setError({ text: error instanceof Error ? error.message : t('auth.signInFailed') }))
+                    .finally(() => setSendingPasswordEmail(false));
+                }}
+                title={t('auth.changePassword')}
+                aria-label={t('auth.changePassword')}
+                className="inline-flex size-8 items-center justify-center rounded-md border-2 border-black bg-white text-neutral-700 transition-all hover:bg-neutral-100 hover:shadow-[2px_2px_0_0_#000]"
+              >
+                <KeyRound className="size-4" />
+              </button>}
             <button
               onClick={handleSignOut}
               title={t('userMenu.signOut')}
@@ -1039,7 +1062,9 @@ const LOGIN_BOUNCE_KEY = 'oa_login_bounce_at';
 
 function SignInGate({ signIn }: { signIn: () => Promise<void> }) {
   const t = useT();
-  const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || !!desktopHost());
+  const { authError } = useOpenAgentsAuth();
+  const [signInError, setSignInError] = useState('');
+  const isLocal = typeof window !== 'undefined' && (usesInlineLogin() || window.location.hostname === 'localhost' || !!desktopHost());
   const [showInline, setShowInline] = useState(false);
 
   useEffect(() => {
@@ -1050,13 +1075,13 @@ function SignInGate({ signIn }: { signIn: () => Promise<void> }) {
     }
     // If we bounced to central login recently and are back here still logged
     // out, the round-trip failed — stop looping and offer inline sign-in.
-    const last = Number(sessionStorage.getItem(LOGIN_BOUNCE_KEY) || 0);
+    const last = Number(scopedSessionStorage.getItem(LOGIN_BOUNCE_KEY) || 0);
     if (last && Date.now() - last < 60_000) {
-      sessionStorage.removeItem(LOGIN_BOUNCE_KEY);
+      scopedSessionStorage.removeItem(LOGIN_BOUNCE_KEY);
       setShowInline(true);
       return;
     }
-    sessionStorage.setItem(LOGIN_BOUNCE_KEY, String(Date.now()));
+    scopedSessionStorage.setItem(LOGIN_BOUNCE_KEY, String(Date.now()));
     const returnTo = encodeURIComponent(window.location.href);
     window.location.replace(`https://openagents.org/login?returnTo=${returnTo}`);
   }, [isLocal]);
@@ -1069,15 +1094,22 @@ function SignInGate({ signIn }: { signIn: () => Promise<void> }) {
       style={{ background: PAGE_BG }}
     >
       <div className="flex flex-col items-center gap-3">
-        <Image src="/logo-icon.png" alt="OpenAgents" width={44} height={44} />
+        <Image src={appPath('/logo-icon.png')} alt="OpenAgents" width={44} height={44} />
         <h1 className="text-2xl font-black tracking-tight">{t('auth.signInTitle')}</h1>
         <p className="text-neutral-600 text-sm text-center max-w-md">
           {t('auth.signInBody')}
         </p>
       </div>
-      <BrutalBtn onClick={signIn} color="blue">
-        {desktopHost() ? t('auth.signInTitle') : t('workspaceGate.signInWithGoogle')}
+      <BrutalBtn onClick={() => { void signIn().catch((error: unknown) => setSignInError(error instanceof Error ? error.message : 'Sign-in failed')); }} color="blue">
+        {desktopHost() || usesOidcLogin() ? t('auth.signInTitle') : t('workspaceGate.signInWithGoogle')}
       </BrutalBtn>
+      {usesOidcLogin() && <>
+        <BrutalBtn color="white" disabled={!allowsOidcRegistration()} onClick={() => { void registerWithOidc().catch((error: unknown) => setSignInError(error instanceof Error ? error.message : t('auth.signInFailed'))); }}>
+          {t('auth.register')}
+        </BrutalBtn>
+        <p className="max-w-md text-center text-sm text-neutral-600">{t(allowsOidcRegistration() ? 'auth.registrationHint' : 'auth.registrationClosed')}</p>
+      </>}
+      {(authError || signInError) && <p role="alert" className="text-sm text-red-600">{authError || signInError}</p>}
     </div>
   );
 }

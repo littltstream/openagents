@@ -1,4 +1,5 @@
 'use client';
+import { appPath } from '@/lib/app-path';
 import { useOnboardingSurface, useDismissOnboarding } from './onboarding-surface';
 import { FirstDeviceHint } from './first-device-hint';
 import { ConnectAgentButton } from './connect-agent-button';
@@ -304,14 +305,14 @@ export function NavRail() {
             title={workspaceLabel}
           >
             <Image
-              src="/logo-black.png"
+              src={appPath('/logo-black.png')}
               alt=""
               width={32}
               height={32}
               className="size-full object-contain dark:hidden"
             />
             <Image
-              src="/logo-white.png"
+              src={appPath('/logo-white.png')}
               alt=""
               width={32}
               height={32}

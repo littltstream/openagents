@@ -1,4 +1,8 @@
 'use client';
+import { scopedLocalStorage } from '@/lib/scoped-storage';
+
+import { appPath } from '@/lib/app-path';
+
 
 import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
@@ -22,7 +26,7 @@ export function YumiGuide() {
 
   useEffect(() => {
     try {
-      setCollapsed(window.localStorage.getItem(STORAGE_KEY) === '1');
+      setCollapsed(scopedLocalStorage.getItem(STORAGE_KEY) === '1');
     } catch {
       // storage unavailable (private mode) — default to expanded
     }
@@ -33,7 +37,7 @@ export function YumiGuide() {
     setCollapsed((prev) => {
       const next = !prev;
       try {
-        window.localStorage.setItem(STORAGE_KEY, next ? '1' : '0');
+        scopedLocalStorage.setItem(STORAGE_KEY, next ? '1' : '0');
       } catch {}
       return next;
     });
@@ -47,7 +51,7 @@ export function YumiGuide() {
         onClick={toggle}
         className="w-full flex items-center gap-2 px-4 lg:px-8 py-1.5 text-[12px] text-muted-foreground hover:text-foreground bg-primary/[0.03] hover:bg-primary/[0.06] border-b border-border/50 transition-colors"
       >
-        <img src="/yumi-avatar.png" alt="" className="size-4 rounded-full object-cover" draggable={false} />
+        <img src={appPath('/yumi-avatar.png')} alt="" className="size-4 rounded-full object-cover" draggable={false} />
         <span className="truncate">{t('yumiGuide.collapsedHint')}</span>
         <ChevronDown className="size-3.5 ml-auto shrink-0" />
       </button>
@@ -59,7 +63,7 @@ export function YumiGuide() {
       <div className="mx-auto w-full max-w-3xl xl:max-w-4xl 2xl:max-w-6xl px-4 lg:px-8 py-3">
         <div className="flex items-start gap-3">
           <img
-            src="/yumi-avatar.png"
+            src={appPath('/yumi-avatar.png')}
             alt="Yumi"
             className="size-8 shrink-0 rounded-full object-cover mt-0.5"
             draggable={false}

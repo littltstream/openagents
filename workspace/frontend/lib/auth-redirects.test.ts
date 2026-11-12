@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { goToCentralLogin, goToCentralLogout, redirectToLogin } from './auth-redirects';
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 describe('desktop account boundaries', () => {
   it('uses desktop sign-in instead of navigating the embedded app to the account site', () => {
     const signIn = vi.fn();
@@ -54,4 +54,21 @@ it('can bypass inline login even on localhost', () => {
   goToCentralLogin(popup, { forceCentral: true });
   expect(popup).not.toHaveBeenCalled();
   expect(location.href).toContain('https://openagents.org/login?returnTo=');
+});
+
+it('uses self-hosted login even for a forced-central invitation in OIDC mode', () => {
+  vi.stubEnv('NEXT_PUBLIC_AUTH_MODE', 'oidc');
+  const replace = vi.fn();
+  const location = { hostname: 'workspace.example.test', pathname: '/invite/test', search: '', hash: '', replace };
+  vi.stubGlobal('window', { location });
+  goToCentralLogin(undefined, { forceCentral: true });
+  expect(replace).toHaveBeenCalledWith('/login?returnTo=%2Finvite%2Ftest');
+});
+
+it('does not redirect a self-hosted OIDC logout to the official account site', async () => {
+  vi.stubEnv('NEXT_PUBLIC_AUTH_MODE', 'oidc');
+  const location = { hostname: 'workspace.example.test', href: 'https://workspace.example.test/' };
+  vi.stubGlobal('window', { location });
+  await goToCentralLogout(vi.fn().mockResolvedValue(undefined));
+  expect(location.href).toBe('https://workspace.example.test/');
 });

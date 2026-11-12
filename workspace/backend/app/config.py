@@ -17,8 +17,18 @@ class Config:
         "postgresql://postgres:dev@localhost:5432/openagents_workspace",
     )
 
-    # Auth mode: "workspace_token" (self-hosted) or "firebase" (hosted)
+    # Human login: workspace_token, firebase, or oidc (self-hosted Keycloak).
     AUTH_MODE: str = os.environ.get("AUTH_MODE", "workspace_token")
+
+    OIDC_ISSUER_URL: str = os.environ.get("OIDC_ISSUER_URL", "").rstrip("/")
+    OIDC_CLIENT_ID: str = os.environ.get("OIDC_CLIENT_ID", "openagents-workspace")
+    # May use the private Docker address while tokens retain the public issuer.
+    OIDC_JWKS_URL: str = os.environ.get("OIDC_JWKS_URL", "")
+    OIDC_ADMIN_REALM_URL: str = os.environ.get("OIDC_ADMIN_REALM_URL", "").rstrip("/")
+    OIDC_MAILER_CLIENT_ID: str = os.environ.get("OIDC_MAILER_CLIENT_ID", "openagents-account-mailer")
+    OIDC_MAILER_CLIENT_SECRET: str = os.environ.get("OIDC_MAILER_CLIENT_SECRET", "")
+    OIDC_PASSWORD_EMAIL_ENABLED: bool = os.environ.get("OIDC_PASSWORD_EMAIL_ENABLED", "0").lower() in ("1", "true")
+    OIDC_PASSWORD_RESET_REDIRECT_URI: str = os.environ.get("OIDC_PASSWORD_RESET_REDIRECT_URI", "")
 
     # Firebase (used for user login on workspace.openagents.org).
     #
@@ -178,11 +188,12 @@ class Config:
     )
 
     # Invitations & transactional email. Invite links point at the workspace
-    # frontend; email delivery goes through Resend when a key is configured
-    # (otherwise invites are created but the email step is skipped).
+    # frontend; SMTP uses a private mounted JSON file. Without SMTP, the
+    # existing Resend configuration remains supported.
     FRONTEND_BASE_URL: str = os.environ.get("FRONTEND_BASE_URL", "https://workspace.openagents.org")
     RESEND_API_KEY: str = os.environ.get("RESEND_API_KEY", "")
     EMAIL_FROM: str = os.environ.get("EMAIL_FROM", "OpenAgents <noreply@openagents.org>")
+    SMTP_CONFIG_FILE: str = os.environ.get("SMTP_CONFIG_FILE", "")
     INVITE_TTL_DAYS: int = int(os.environ.get("INVITE_TTL_DAYS", "7"))
 
     # Server-side product analytics (PostHog). Authoritative funnel

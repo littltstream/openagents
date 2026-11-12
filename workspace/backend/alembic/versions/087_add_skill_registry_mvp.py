@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 deployment_backward_compatible = True
 revision = "087"
-down_revision = "086"
+down_revision = "086_dm_history"
 branch_labels = None
 depends_on = None
 

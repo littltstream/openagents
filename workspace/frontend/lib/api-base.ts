@@ -12,3 +12,6 @@ export function getProjectPreviewUrl(path: string, apiBase = getApiBaseUrl()): s
 export function getApiBaseUrl(configured = process.env.NEXT_PUBLIC_API_URL): string {
   return (configured || HOSTED_API).replace(/\/+$/, '');
 }
+
+/** Absolute backend endpoint for external devices and CLI clients. */
+export const getDirectApiBaseUrl = getApiBaseUrl;

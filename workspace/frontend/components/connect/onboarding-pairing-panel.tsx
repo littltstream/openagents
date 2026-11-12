@@ -9,6 +9,7 @@ import { desktopDownloads } from '@/lib/desktop-downloads';
 import { useT } from '@/lib/i18n';
 import type { PairingCode } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { getDirectApiBaseUrl } from '@/lib/api-base';
 
 function SetupCommand({ command, disabled = false }: { command: string; disabled?: boolean }) {
   const t = useT();
@@ -169,7 +170,7 @@ export function OnboardingPairingPanel({ pairing, onDismiss, onRegenerate, regen
             {terminal && (
               <details className="rounded-lg bg-muted/35 px-3 py-2.5">
                 <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">{t('onboarding.cliPairingFallback')}</summary>
-                <div className="mt-3"><SetupCommand command={`agn device connect ${pairing.code}`} disabled={expired} /></div>
+                <div className="mt-3"><SetupCommand command={`agn device connect ${pairing.code} --endpoint "${getDirectApiBaseUrl()}"`} disabled={expired} /></div>
               </details>
             )}
           </div>

@@ -1,6 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
+  basePath: process.env.NEXT_PUBLIC_BASE_PATH || '',
+  ...(process.env.NEXT_PUBLIC_BASE_PATH && { trailingSlash: true }),
   ...(process.env.NEXT_DEV_ALLOWED_ORIGIN && {
     allowedDevOrigins: [process.env.NEXT_DEV_ALLOWED_ORIGIN],
   }),
@@ -27,6 +29,7 @@ const nextConfig = {
     ];
   },
   async rewrites() {
+    if (process.env.NEXT_PUBLIC_BASE_PATH) return [];
     return [
       {
         source: '/wsapi/:path*',

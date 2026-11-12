@@ -1,4 +1,6 @@
 'use client';
+import { scopedLocalStorage } from '@/lib/scoped-storage';
+
 
 /**
  * Compact campaign-progress box for the bottom of the left sidebar.
@@ -28,7 +30,7 @@ export function CampaignSidebarCard() {
   const { idToken } = useOpenAgentsAuth();
   const [status, setStatus] = useState<CampaignStatus | null>(null);
   const [dismissed, setDismissed] = useState(() =>
-    typeof window !== 'undefined' && localStorage.getItem(DISMISS_KEY) === '1',
+    typeof window !== 'undefined' && scopedLocalStorage.getItem(DISMISS_KEY) === '1',
   );
 
   // Stop polling once there is nothing left for this card to show.
@@ -97,7 +99,7 @@ export function CampaignSidebarCard() {
         <button
           onClick={(e) => {
             e.stopPropagation();
-            localStorage.setItem(DISMISS_KEY, '1');
+            scopedLocalStorage.setItem(DISMISS_KEY, '1');
             setDismissed(true);
           }}
           title={t('campaign.sidebarDismiss')}
