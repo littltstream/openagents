@@ -79,9 +79,16 @@ The preparation command changes local build metadata and installs the tarball
 from `packages/launcher/vendor`. Do not commit that generated directory or the
 generated package metadata. CI performs the same preparation in a fresh checkout.
 
-Set the versions and release tag in `chippilot-release.json`, commit the changes,
-then push the matching `chippilot-v*` tag to **your fork**. The ChipPilot
+Distribution numbering starts at `.1`. For the next release, update all three
+fields in `chippilot-release.json` together: `chippilot-v1.1.14.2`,
+`1.1.14-chippilot.2`, and `0.2.226-chippilot.2`. Commit and push to your fork's
+`develop` branch; the workflow creates the matching tag when publishing.
+Normal releases retain the preceding versions. The ChipPilot
 distribution workflow builds each operating system on a native runner and only
 publishes when every required build succeeds. It ships the same CLI archive,
 installation scripts, desktop installers, update manifests and `SHA256SUMS`.
 Publishing does not require access to upstream npm or signing credentials.
+
+When reinstalling after the development numbering reset from `.3`/`.4` to `.1`,
+run the installation script again (or manually reinstall Desktop). Version
+comparisons intentionally do not treat `.1` as newer than an installed `.4`.

@@ -2,8 +2,7 @@ name: ChipPilot distribution
 
 on:
   push:
-    tags: ['chippilot-v*']
-    branches: ['feature/chippilot-distribution']
+    branches: ['develop']
     paths: ['chippilot-release.json']
   workflow_dispatch:
 
@@ -109,5 +108,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NODE_PATH: ${{ runner.temp }}/release-tools/node_modules
-          CHIPPILOT_RESET_RELEASE_SERIES: '2026-11-12'
         run: node scripts/publish-chippilot.cjs release-artifacts
