@@ -46,7 +46,7 @@ describe("inAppBlocker", () => {
 
   it("names the reason a workspace opens in the browser, so the card can say it", () => {
     expect(inAppBlocker(ws, undefined, false, member)).toBe("signedOut")
-    expect(inAppBlocker({ ...ws, endpoint: "https://ws.example.com" }, undefined, true, member)).toBe("otherDeployment")
+    expect(inAppBlocker({ id: "foreign-w1", slug: ws.slug, endpoint: "https://ws.example.com" }, undefined, true, member)).toBe("otherDeployment")
     expect(inAppBlocker({ id: "w2", slug: "other" }, undefined, true, member)).toBe("notMember")
     expect(inAppBlocker(ws, undefined, true, null)).toBe("unknown")
     expect(inAppBlocker(ws, undefined, true, member)).toBeNull()
@@ -83,8 +83,14 @@ describe("opensInApp", () => {
   })
 
   it("uses the browser for a workspace on another deployment", () => {
-    const elsewhere = { ...ws, endpoint: "https://ws.example.com" }
+    const elsewhere = { id: "foreign-w1", slug: ws.slug, endpoint: "https://ws.example.com" }
     expect(opensInApp(elsewhere, undefined, true, member)).toBe(false)
     expect(opensInApp(elsewhere, "https://ws.example.com", true, member)).toBe(true)
   })
+
+  it.each(["http://101.43.200.65:8000", "https://api.chippilot.icu"])(
+    "recognizes an account workspace by its stable ID after moving from %s", (endpoint) => {
+      expect(opensInApp({ ...ws, endpoint }, undefined, true, member)).toBe(true)
+    },
+  )
 })

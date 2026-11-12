@@ -31,19 +31,23 @@ export function workspaceWebBaseUrl(): string {
   return serverConfig().workspaceWebUrl.replace(/\/+$/, "")
 }
 
-/**
- * Whether a workspace this device joined opens in the app's own Workspace.
- *
- * The embedded Workspace needs a signed-in account and talks to the configured
- * deployment only, so a workspace on another deployment, or any workspace while
- * signed out, opens in the browser instead.
- *
- * The account must also already be a member. The page is opened with this
- * device's access token, and a signed-in page that arrives with a token adds
- * the account to that workspace — so opening a workspace some other account
- * paired this device into quietly made the signed-in account a member of it.
- * `memberOf` is the account's workspace list; unknown (null) means the browser.
- */
+/** Match against memberships fetched from the configured server. A stable ID
+ * survives an API/domain migration; a slug alone only identifies a workspace
+ * within the same deployment. Never use a foreign record's token to open it. */
+export function accountWorkspaceMatch(
+  ws: Workspace,
+  configuredEndpoint: string | undefined,
+  memberOf: AccountWorkspace[] | null,
+): AccountWorkspace | undefined {
+  const byId = memberOf?.find((m) => m.workspaceId === ws.id)
+  if (byId) return byId
+  if (apiEndpoint(ws.endpoint) !== apiEndpoint(configuredEndpoint)) return undefined
+  return memberOf?.find((m) => !!ws.slug && m.slug === ws.slug)
+}
+
+/** The signed-in account must already belong to the current server's workspace.
+ * Open it with the account session, using the canonical server slug and no
+ * device token. Unknown memberships never imply permission to open in-app. */
 export function opensInApp(
   ws: Workspace,
   configuredEndpoint: string | undefined,
@@ -69,10 +73,9 @@ export function inAppBlocker(
   memberOf: AccountWorkspace[] | null,
 ): InAppBlocker | null {
   if (!signedIn) return "signedOut"
-  if (apiEndpoint(ws.endpoint) !== apiEndpoint(configuredEndpoint)) return "otherDeployment"
   if (!memberOf) return "unknown"
-  const member = memberOf.some((m) => m.workspaceId === ws.id || (!!ws.slug && m.slug === ws.slug))
-  return member ? null : "notMember"
+  if (accountWorkspaceMatch(ws, configuredEndpoint, memberOf)) return null
+  return apiEndpoint(ws.endpoint) !== apiEndpoint(configuredEndpoint) ? "otherDeployment" : "notMember"
 }
 
 export function workspaceDisplayHost(): string {

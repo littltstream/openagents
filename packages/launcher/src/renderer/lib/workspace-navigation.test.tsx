@@ -53,7 +53,7 @@ describe("Open workspace entries", () => {
 
   it("keeps a foreign token out of the embedded workspace even for a signed-in member", async () => {
     useAccountStore.setState({ account: { email: "member@example.test", displayName: "Member", expiresAt: 9999999999 } })
-    const saved = { ...ws, endpoint: "https://api.chippilot.icu" }
+    const saved = { ...ws, id: "foreign-w1", endpoint: "https://api.chippilot.icu" }
     api.listWorkspaces.mockResolvedValue([saved])
     const workspace = renderHook(() => useWorkspaceOpening(vi.fn()))
     act(() => workspace.result.current.openWorkspace(saved))
@@ -73,9 +73,29 @@ describe("Open workspace entries", () => {
     useAccountStore.setState({ workspaceTarget: null })
     const actions = renderHook(() => useAgentActions(vi.fn(), vi.fn()))
     await act(() => actions.result.current.openWorkspace({ name: "codex1", type: "codex", state: "running", network: ws.slug, health: null }))
-    expect(useAccountStore.getState().workspaceTarget).toEqual({ slug: ws.slug, name: ws.name, token: ws.token })
+    expect(useAccountStore.getState().workspaceTarget).toEqual({ slug: ws.slug, name: ws.name, token: null })
     expect(api.openExternal).not.toHaveBeenCalled()
   })
+
+  it.each(["http://101.43.200.65:8000", "https://api.chippilot.icu"])(
+    "opens the account's canonical workspace from both local entries after migrating %s", async (endpoint) => {
+      useAccountStore.setState({ account: { email: "member@example.test", displayName: "Member", expiresAt: 9999999999 } })
+      const saved = { ...ws, slug: "old-team-name", endpoint }
+      api.listWorkspaces.mockResolvedValue([saved])
+      const workspace = renderHook(() => useWorkspaceOpening(vi.fn()))
+      act(() => workspace.result.current.openWorkspace(saved))
+      const expected = { slug: "team", name: "Team", token: null }
+      await waitFor(() => expect(useAccountStore.getState().workspaceTarget).toEqual(expected))
+      expect(workspace.result.current.canOpenInApp(saved)).toBe(true)
+      expect(workspace.result.current.browserOnlyReason(saved)).toBeNull()
+      useAccountStore.setState({ workspaceTarget: null })
+      const actions = renderHook(() => useAgentActions(vi.fn(), vi.fn()))
+      await act(() => actions.result.current.openWorkspace({ name: "codex1", type: "codex", state: "running", network: saved.slug, health: null }))
+      expect(useAccountStore.getState().workspaceTarget).toEqual(expected)
+      expect(api.openExternal).not.toHaveBeenCalled()
+      expect(saved.token).toBe("old-device-secret")
+    },
+  )
 
   it("opens the configured frontend to obtain a pairing code", () => {
     openWorkspaceSite()

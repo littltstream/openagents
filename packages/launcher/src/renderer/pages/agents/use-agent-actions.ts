@@ -5,7 +5,7 @@ import { useAccountStore } from "@renderer/store/account"
 import { useAgentsStore } from "@renderer/store/agents"
 import { useLocalConnectorStore } from "@renderer/store/local-connector"
 import { capture } from "@renderer/lib/analytics"
-import { inAppBlocker, opensInApp, workspaceWebBaseUrl } from "@renderer/lib/workspace-urls"
+import { accountWorkspaceMatch, inAppBlocker, workspaceWebBaseUrl } from "@renderer/lib/workspace-urls"
 import type { Agent } from "@renderer/types"
 import type { ToastType } from "@renderer/hooks/useToast"
 
@@ -243,8 +243,9 @@ export function useAgentActions(
       // Workspace talks to: open it there, as Connected Workspaces does,
       // instead of sending the user out to a browser tab.
       const configured = typeof endpoint === "string" && endpoint ? endpoint : undefined
-      if (ws && opensInApp(ws, configured, signedIn, memberOf)) {
-        useAccountStore.getState().openWorkspace({ slug, name: ws.name, token: ws.token ?? null })
+      const member = ws && signedIn ? accountWorkspaceMatch(ws, configured, memberOf) : undefined
+      if (member) {
+        useAccountStore.getState().openWorkspace({ slug: member.slug, name: member.name, token: null })
         return
       }
       // Signed in, yet sent to the browser: say why, or it looks like the

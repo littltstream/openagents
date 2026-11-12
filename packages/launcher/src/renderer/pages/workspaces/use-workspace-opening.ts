@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 
-import { inAppBlocker, opensInApp, workspacePageUrl, type InAppBlocker } from "@renderer/lib/workspace-urls"
+import { accountWorkspaceMatch, inAppBlocker, opensInApp, workspacePageUrl, type InAppBlocker } from "@renderer/lib/workspace-urls"
 import { useAccountStore } from "@renderer/store/account"
 import type { AccountWorkspace, Workspace } from "@renderer/types"
 
@@ -60,9 +60,10 @@ export function useWorkspaceOpening(markUsed: (id: string) => void): {
     void (async () => {
       const url = endpointLoad.current ? await endpointLoad.current : endpoint
       const list = memberOf ?? (memberLoad.current ? await memberLoad.current : null)
-      if (!opensInApp(ws, url, !!account, list)) { openInBrowser(ws); return }
+      const member = account ? accountWorkspaceMatch(ws, url, list) : undefined
+      if (!member) { openInBrowser(ws); return }
       markUsed(ws.id)
-      useAccountStore.getState().openWorkspace({ slug: ws.slug || ws.id, name: ws.name, token: ws.token ?? null })
+      useAccountStore.getState().openWorkspace({ slug: member.slug, name: member.name, token: null })
     })()
   }
 
