@@ -18,7 +18,12 @@ function agentName(value) {
 
 function channelName(value) {
   const name = text(value, 'channel').replace(/^channel\//, '');
-  if (/[\s/\x00-\x1f]/u.test(name) || name.startsWith('dm:')) throw new Error('A group channel name is required');
+  if (/[\s/\x00-\x1f]/u.test(name)) throw new Error('Invalid conversation name');
+  if (name.startsWith('dm:')) {
+    const peer = name.slice(3);
+    if (peer.startsWith('openagents:')) agentName(peer);
+    else if (!/^human:[^,\s/\x00-\x1f]+$/u.test(peer) || peer === 'human:system') throw new Error('Invalid direct conversation peer');
+  }
   return name;
 }
 
@@ -125,6 +130,24 @@ class CollaborationClient {
     return channel;
   }
 
+  _messageScope(name) {
+    return name.startsWith('dm:')
+      ? { conversation: `openagents:${this.agentName},${name.slice(3)}` }
+      : { channel: name };
+  }
+
+  async _conversation(discovery, name, requireMembership = false) {
+    if (!name.startsWith('dm:')) return this._channel(discovery, name, requireMembership);
+    const peer = name.slice(3);
+    if (peer === `openagents:${this.agentName}`) throw new Error('A direct conversation requires another participant');
+    // DMs are native direct events, not discoverable group channels. Require
+    // server-visible history involving THIS caller before reading or replying.
+    const data = await this._get('/v1/events', { ...this._messageScope(name), type: 'workspace.message.posted', limit: '1', sort: 'desc' });
+    if (!data || !Array.isArray(data.events)) throw new Error('Invalid direct conversation response');
+    if (!data.events.length) throw new Error('No existing direct conversation is visible to the calling agent');
+    return { participants: [this.agentName, ...(peer.startsWith('openagents:') ? [agentName(peer)] : [])] };
+  }
+
   async _event(event) {
     const result = unwrap(await this.ws.sendEvent(this.workspaceId, event, this.token, this.sessionId));
     if (!result || typeof result.id !== 'string') throw new Error('Invalid event receipt; check channel history before retrying');
@@ -132,6 +155,7 @@ class CollaborationClient {
   }
 
   async _groupContext(name) {
+    if (name.startsWith('dm:')) return null;
     const data = await this._get('/v1/events', { channel: name, type: 'network.channel.create', limit: '1', sort: 'asc' });
     if (!data || !Array.isArray(data.events)) throw new Error('Invalid group context response');
     const created = data.events[0];
@@ -148,7 +172,7 @@ class CollaborationClient {
     if (!selected.length) throw new Error('Select at least one other agent');
     const origin = channelName(origin_channel || this.channelName);
     const discovery = await this._discover();
-    this._channel(discovery, origin, true);
+    await this._conversation(discovery, origin, true);
     for (const name of selected) {
       const member = discovery.agents.find((a) => a.address === `openagents:${name}`);
       if (!member || member.can_start_thread !== true) throw new Error(`Agent ${name} is not available for a new collaboration with this identity`);
@@ -172,7 +196,7 @@ class CollaborationClient {
     const recipients = names(targets, 'targets', { empty: true });
     if (recipients.includes(this.agentName)) throw new Error('Do not dispatch a task to yourself');
     const discovery = await this._discover();
-    const group = this._channel(discovery, name, true);
+    const group = await this._conversation(discovery, name, true);
     for (const target of recipients) {
       if (!(group.participants || []).includes(target)) throw new Error(`Agent ${target} is not a participant in this channel`);
     }
@@ -181,7 +205,9 @@ class CollaborationClient {
     // wake another specialist because its name occurs in the report text.
     const routing = recipients.length ? recipients : ['__no_response__'];
     const event = await this._event({
-      type: 'workspace.message.posted', source: `openagents:${this.agentName}`, target: `channel/${name}`,
+      type: 'workspace.message.posted', source: `openagents:${this.agentName}`,
+      target: name.startsWith('dm:') ? name.slice(3) : `channel/${name}`,
+      ...(name.startsWith('dm:') ? { visibility: 'direct' } : {}),
       payload: { content: body, message_type: 'chat' },
       metadata: { explicit_targets: routing, target_agents: routing,
         collaboration_tool: 'workspace_send_message',
@@ -205,9 +231,9 @@ class CollaborationClient {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit must be an integer from 1 to 100');
     if (after !== undefined) text(after, 'after');
     const discovery = await this._discover();
-    this._channel(discovery, name);
+    await this._conversation(discovery, name);
     const collaboration = await this._groupContext(name);
-    const data = await this._get('/v1/events', { channel: name, type: 'workspace.message.posted',
+    const data = await this._get('/v1/events', { ...this._messageScope(name), type: 'workspace.message.posted',
       limit: String(limit), sort: after ? 'asc' : 'desc', exclude_message_types: 'status,thinking,todos,loading',
       ...(after ? { after } : {}) });
     if (!data || !Array.isArray(data.events)) throw new Error('Invalid messages response: events are required');

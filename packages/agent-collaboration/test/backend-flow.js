@@ -13,6 +13,9 @@ async function main() {
     channelName: process.env.OA_CHANNEL_NAME,
   };
   const coordinator = new CollaborationClient({ ...connection, agentName: 'agent-alpha' });
+  if (connection.channelName.startsWith('dm:')) {
+    await assert.rejects(() => coordinator.getMessages({ channel: 'dm:human:unrelated@example.test' }), /direct conversation/i);
+  }
   const reconnect = await connection.wsClient.joinNetwork('agent-beta', connection.token, {
     network: connection.workspaceId, description: 'Changed local default must not replace workspace description',
   });
@@ -46,7 +49,7 @@ async function main() {
   const final = await fresh.sendMessage({ channel: reply.collaboration.origin_channel, targets: [], content: 'Backend collaboration flow verified.' });
   const original = await fresh.getMessages({ channel: connection.channelName });
   assert.ok(original.messages.some((m) => m.id === final.event_id));
-  process.stdout.write(JSON.stringify({ group: group.channel, private: group.visibility === 'private', origin_recovered: true, returned_to_user_channel: true }));
+  process.stdout.write(JSON.stringify({ group: group.channel, private: group.visibility === 'private', origin_recovered: true, returned_to_user_channel: true, final_event_id: final.event_id }));
 }
 
 main().catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });

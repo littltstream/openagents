@@ -36,6 +36,7 @@ async function fixture(t) {
       { address: 'channel/general', participants: ['Agent_B'], visibility: 'private' },
       { address: 'channel/readable', participants: ['Agent_A'], visibility: 'public' },
     ],
+    directMessages: [],
     messages: [
       { id: 'event-1', source: 'openagents:Agent_A', timestamp: 1, payload: { content: 'first' } },
       { id: 'event-2', source: 'openagents:Agent_A', timestamp: 2, payload: { content: 'second' } },
@@ -63,9 +64,13 @@ async function fixture(t) {
         const creation = state.creations.get(url.searchParams.get('channel'));
         return reply({ events: creation ? [creation] : [] });
       }
+      const conversation = url.searchParams.get('conversation');
+      const pair = conversation && conversation.split(',');
+      const messages = pair ? state.directMessages.filter((m) => m.visibility === 'direct'
+        && ((m.source === pair[0] && m.target === pair[1]) || (m.source === pair[1] && m.target === pair[0]))) : state.messages;
       const after = url.searchParams.get('after');
-      const start = after ? state.messages.findIndex((m) => m.id === after) + 1 : 0;
-      let events = state.messages.slice(start);
+      const start = after ? messages.findIndex((m) => m.id === after) + 1 : 0;
+      let events = messages.slice(start);
       if (url.searchParams.get('sort') === 'desc') events.reverse();
       return reply({ events: events.slice(0, Number(url.searchParams.get('limit'))) });
     }
@@ -79,8 +84,10 @@ async function fixture(t) {
         state.creations.set(name, creation);
         return reply(creation);
       }
-      return reply({ id: `sent-${state.writes.length}`, ...body,
-        metadata: { ...body.metadata, target_agents: state.unrouted ? ['__no_response__'] : body.metadata.explicit_targets } });
+      const sent = { id: `sent-${state.writes.length}`, ...body,
+        metadata: { ...body.metadata, target_agents: state.unrouted ? ['__no_response__'] : body.metadata.explicit_targets } };
+      if (sent.visibility === 'direct') state.directMessages.push(sent);
+      return reply(sent);
     }
     return reply(null, 404, 404);
   });
@@ -226,6 +233,89 @@ test('history returns a chronological latest window and a usable forward cursor'
   assert.deepEqual(empty.messages, []);
   assert.equal(empty.next_after, 'event-3');
   await assert.rejects(() => client.getMessages({ channel: 'invisible' }), /not visible/);
+});
+
+test('direct user conversations can create teams, recover the origin, and receive the final report', async (t) => {
+  const { state, ws } = await fixture(t);
+  const origin = 'dm:human:owner@example.test';
+  state.directMessages.push({ id: 'dm-request', source: 'human:owner@example.test', target: 'openagents:Agent_B',
+    visibility: 'direct', payload: { content: 'Analyze chip tests' } });
+  const client = new CollaborationClient({ wsClient: ws, workspaceId: 'ws-1', agentName: 'Agent_B', token: TOKEN, channelName: origin });
+  const group = await client.createGroup({ title: 'DM-origin team', participants: ['Agent_A'] });
+  assert.equal(group.origin_channel, origin);
+  await client.sendMessage({ channel: group.channel, targets: ['Agent_A'], content: 'Compute locally' });
+  const specialist = new CollaborationClient({ wsClient: ws, workspaceId: 'ws-1', agentName: 'Agent_A', token: TOKEN, channelName: group.channel });
+  assert.deepEqual((await specialist.getMessages({ channel: group.channel })).collaboration, { coordinator: 'Agent_B', origin_channel: origin });
+  await specialist.sendMessage({ channel: group.channel, targets: ['Agent_B'], content: 'Computed result' });
+  const fresh = new CollaborationClient({ wsClient: ws, workspaceId: 'ws-1', agentName: 'Agent_B', token: TOKEN, channelName: group.channel });
+  const context = (await fresh.getMessages({ channel: group.channel })).collaboration;
+  const report = await fresh.sendMessage({ channel: context.origin_channel, targets: [], content: 'Final verified summary' });
+  assert.equal(report.status, 'recorded');
+  const sent = state.writes.at(-1);
+  assert.equal(sent.target, 'human:owner@example.test');
+  assert.equal(sent.visibility, 'direct');
+  assert.deepEqual(sent.metadata.target_agents, ['__no_response__']);
+  const history = await fresh.getMessages({ channel: origin });
+  assert.deepEqual(history.messages.map((m) => m.id), ['dm-request', report.event_id]);
+  assert.equal(history.collaboration, null);
+  const later = await fresh.getMessages({ channel: origin, after: 'dm-request' });
+  assert.deepEqual(later.messages.map((m) => m.id), [report.event_id]);
+  assert.ok(state.requests.some((r) => r.url.searchParams.get('conversation') === 'openagents:Agent_B,human:owner@example.test'));
+  assert.equal(state.requests.some((r) => r.url.searchParams.get('channel')?.startsWith('dm:')), false);
+});
+
+test('direct conversation validation rejects unrelated histories, malformed peers, and unrelated dispatch targets', async (t) => {
+  const { client, state } = await fixture(t);
+  const origin = 'dm:human:owner@example.test';
+  state.directMessages.push({ id: 'other-agent-dm', source: 'human:owner@example.test', target: 'openagents:Agent_A', visibility: 'direct' });
+  await assert.rejects(() => client.createGroup({ title: 'No prior conversation', participants: ['Agent_A'], origin_channel: origin }), /direct conversation/i);
+  await assert.rejects(() => client.getMessages({ channel: origin }), /direct conversation/i);
+  for (const name of ['dm:', 'dm:human:', 'dm:human:system', 'dm:human:owner@example.test,openagents:Agent_A', 'dm:channel/general', 'dm:openagents:Agent_B', 'dm:unknown:peer']) {
+    await assert.rejects(() => client.sendMessage({ channel: name, content: 'Must not send' }));
+  }
+  assert.equal(state.writes.length, 0);
+  state.directMessages.push({ id: 'own-dm', source: 'human:owner@example.test', target: 'openagents:Agent_B', visibility: 'direct' });
+  await assert.rejects(() => client.sendMessage({ channel: origin, targets: ['Agent_A'], content: 'Must not wake a third party' }), /participant/);
+  assert.equal(state.writes.length, 0);
+  state.error = 'http';
+  await assert.rejects(() => client.createGroup({ title: 'Denied', participants: ['Agent_A'], origin_channel: origin }));
+});
+
+test('the actual collaboration CLI accepts direct user origins and reads direct conversation history', async (t) => {
+  const { endpoint, state } = await fixture(t);
+  const origin = 'dm:human:owner@example.test';
+  state.directMessages.push({ id: 'cli-dm-request', source: 'human:owner@example.test', target: 'openagents:Agent_B',
+    visibility: 'direct', payload: { content: 'Delegate this task' } });
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'oa-dm-cli-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'args.json');
+  const args = ['--endpoint', endpoint, '--workspace-id', 'ws-1', '--agent-name', 'Agent_B', '--channel-name', origin];
+  fs.writeFileSync(file, JSON.stringify({ title: 'CLI DM team', participants: ['Agent_A'] }));
+  const created = await child(CLI, [...args, 'create-group', '--args-file', file], { OA_WORKSPACE_TOKEN: TOKEN });
+  assert.equal(created.code, 0, created.stderr);
+  assert.equal(JSON.parse(created.stdout).origin_channel, origin);
+  fs.writeFileSync(file, JSON.stringify({ channel: origin }));
+  const history = await child(CLI, [...args, 'get-messages', '--args-file', file], { OA_WORKSPACE_TOKEN: TOKEN });
+  assert.equal(history.code, 0, history.stderr);
+  assert.equal(JSON.parse(history.stdout).messages[0].id, 'cli-dm-request');
+});
+
+test('native agent DMs only dispatch to their peer and MCP accepts a human DM origin', async (t) => {
+  const { client, ws, state } = await fixture(t);
+  state.directMessages.push({ id: 'agent-dm', source: 'openagents:Agent_A', target: 'openagents:Agent_B', visibility: 'direct' });
+  const sent = await client.sendMessage({ channel: 'dm:openagents:Agent_A', targets: ['Agent_A'], content: 'A directed reply' });
+  assert.deepEqual(sent.routed_agents, ['Agent_A']);
+  assert.equal(state.writes.at(-1).target, 'openagents:Agent_A');
+  assert.equal(state.writes.at(-1).visibility, 'direct');
+  await assert.rejects(() => client.sendMessage({ channel: 'dm:openagents:Agent_A', targets: ['Agent_C'], content: 'Wrong peer' }), /participant/);
+  const origin = 'dm:human:owner@example.test';
+  state.directMessages.push({ id: 'mcp-dm', source: 'human:owner@example.test', target: 'openagents:Agent_B', visibility: 'direct' });
+  const mcp = new McpServer({ wsClient: ws, workspaceId: 'ws-1', agentName: 'Agent_B', token: TOKEN, channelName: origin });
+  const group = await mcp._dispatch('workspace_create_group', { title: 'MCP DM team', participants: ['Agent_A'] });
+  assert.equal(group.structuredContent.origin_channel, origin);
+  const report = await mcp._dispatch('workspace_send_message', { channel: origin, content: 'MCP report', targets: [] });
+  assert.equal(report.structuredContent.status, 'recorded');
+  assert.equal(state.writes.at(-1).target, 'human:owner@example.test');
 });
 
 test('HTTP errors, rejected envelopes, and proxy HTML never become empty/success results', async (t) => {

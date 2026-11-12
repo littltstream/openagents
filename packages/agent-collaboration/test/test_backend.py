@@ -20,13 +20,12 @@ REPOSITORY = Path(__file__).resolve().parents[3]
 
 
 @pytest.fixture
-def backend_context(monkeypatch):
-    monkeypatch.syspath_prepend(str(REPOSITORY / "workspace" / "backend"))
+def backend_context(monkeypatch, backend_fixtures):
     loaded_main = sys.modules.get("app.main")
     previous_overrides = dict(loaded_main.app.dependency_overrides) if loaded_main is not None else {}
     # Reuse the production-type compatibility shims, StaticPool and database
     # dependency override already maintained by the backend test suite.
-    fixtures = runpy.run_path(str(REPOSITORY / "workspace/backend/tests/conftest.py"))
+    fixtures = backend_fixtures
     from app.config import config
     from app import database
 
@@ -53,7 +52,18 @@ def backend_context(monkeypatch):
         engine.dispose()
 
 
-def test_real_backend_collaboration(backend_context):
+@pytest.fixture(scope="module")
+def backend_fixtures():
+    # Modules imported during API requests retain their SessionLocal reference.
+    # Reuse one isolated engine so later cases cannot bind those modules to a
+    # disposed engine from a different runpy execution.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.syspath_prepend(str(REPOSITORY / "workspace" / "backend"))
+        yield runpy.run_path(str(REPOSITORY / "workspace/backend/tests/conftest.py"))
+
+
+@pytest.mark.parametrize("origin_kind", ["channel", "human_dm"])
+def test_real_backend_collaboration(backend_context, origin_kind):
     fixtures, api, db = backend_context
     from app.services.access_model import create_grant, get_or_create_builtin_groups
     server = None
@@ -73,6 +83,20 @@ def test_real_backend_collaboration(backend_context):
         create_grant(db, workspace["id"], resource_kind="agent", resource_id="agent-beta",
                      grantee_kind="group", grantee_id=everyone.id, rights=["act"], granted_by="test@example.com")
         db.commit()
+        if origin_kind == "human_dm":
+            import time
+            from uuid import uuid4
+            from app.models import EventRecord
+            # Existing received messages are test inputs; the JS client must
+            # use the real handlers to discover, delegate and return a DM.
+            for peer, target in (("requester@example.test", "agent-alpha"), ("unrelated@example.test", "agent-beta")):
+                db.add(EventRecord(id=str(uuid4()), network_id=workspace["id"],
+                                   type="workspace.message.posted", source=f"human:{peer}",
+                                   target=f"openagents:{target}", visibility="direct",
+                                   payload={"content": "Please delegate this task", "message_type": "chat"},
+                                   timestamp=int(time.time() * 1000)))
+            db.commit()
+            workspace["channel"]["name"] = "dm:human:requester@example.test"
 
         class ApiBridge(BaseHTTPRequestHandler):
             def dispatch(self):
@@ -106,6 +130,11 @@ def test_real_backend_collaboration(backend_context):
         assert result.returncode == 0, result.stderr
         report = json.loads(result.stdout)
         assert report["private"] and report["origin_recovered"] and report["returned_to_user_channel"]
+        if origin_kind == "human_dm":
+            from sqlalchemy import select
+            final = db.execute(select(EventRecord).where(EventRecord.id == report["final_event_id"])).scalar_one()
+            assert final.visibility == "direct"
+            assert final.target == "human:requester@example.test"
     finally:
         if server is not None:
             server.shutdown()

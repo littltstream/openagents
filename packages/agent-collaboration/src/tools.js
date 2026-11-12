@@ -23,19 +23,19 @@ const defs = [
     description: 'Create a private collaboration group with selected agents. Automatically includes you as coordinator. Saves the originating user channel in the receipt. Creation does not dispatch a task; use workspace_send_message next.',
     inputSchema: { type: 'object', additionalProperties: false, properties: {
       title: string, participants: { ...agents, minItems: 1 },
-      origin_channel: { ...string, description: 'Original user channel; defaults to the current channel. No session history is copied.' },
+      origin_channel: { ...string, description: 'Original user channel or native dm:<peer address> conversation; defaults to the current conversation. No session history is copied.' },
     }, required: ['title', 'participants'] },
   },
   {
     name: 'workspace_send_message',
-    description: 'Post in a specified group. targets names existing group members to wake for actual work. Omit targets to record a result for people without waking agents. A routed receipt does not mean the task is complete.',
+    description: 'Post in a specified group or reply to an existing native dm:<peer address> conversation. targets names existing participants to wake for actual work. Omit targets to record a result for people without waking agents. A routed receipt does not mean the task is complete.',
     inputSchema: { type: 'object', additionalProperties: false, properties: {
       channel: string, content: string, targets: agents,
     }, required: ['channel', 'content'] },
   },
   {
     name: 'workspace_get_messages',
-    description: 'Read group replies and saved collaboration context (coordinator, origin_channel), including in a fresh session. Initially returns the latest window; pass next_after as after to read subsequent messages. Do not invent results when no reply exists.',
+    description: 'Read group replies and saved collaboration context (coordinator, origin_channel), including in a fresh session, or read an existing native dm:<peer address> conversation. Initially returns the latest window; pass next_after as after to read subsequent messages. Do not invent results when no reply exists.',
     inputSchema: { type: 'object', additionalProperties: false, properties: {
       channel: string, after: string, limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
     }, required: ['channel'] },

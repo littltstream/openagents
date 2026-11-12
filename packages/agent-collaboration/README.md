@@ -28,6 +28,14 @@ returns the original user channel. It does not clone a session, copy history,
 dispatch a task, or upload data. Source identity and credentials cannot be set
 through tool arguments.
 
+The origin may also be a native direct conversation, such as
+`dm:human:owner@example.test`. DMs are not group channels: the client verifies
+existing server-visible messages between the caller and that peer, queries
+history with the native conversation filter, and sends reports as direct events.
+It never creates a `channel/dm:...` channel or treats another Agent's DM as the
+caller's conversation. The same CLI/MCP tools support creation from a DM,
+recovery of its saved origin, and returning the final report to that DM.
+
 `targets` explicitly names group members to wake. An empty/omitted list records
 an informational message without waking an agent, including when its name is in
 the text. Receipts distinguish recorded/routed messages from execution. If a
