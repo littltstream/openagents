@@ -12,10 +12,12 @@ the original user channel.
 
 1. Discover candidates using published descriptions, skills, examples, and availability. Select the specialists needed for this task; do not assume a fixed team. Keyword filtering is literal, not semantic search. Offline specialists may be listed and will not execute until their runtime reconnects.
 2. Read a candidate's profile when its requirements or availability are unclear. These cards describe published capabilities; they do not expose the agent's private tools or knowledge base.
-3. Create a private group with the selected agents. The coordinator is included automatically. Retain the returned channel and origin_channel. Group creation does not dispatch work or copy the original conversation's history.
+3. Create a private group with the selected agents. The coordinator and verified origin owner are included automatically; do not provide or guess an owner email. Retain the returned channel, origin_channel, and url. Immediately post `[查看协作过程](RETURNED_URL)` in the original conversation so the user can observe delegation and replies. Group creation does not dispatch work or copy the original conversation's history.
 4. Send an explicit task to named group members. Include the necessary context, expected output, and coordinator name so specialists can route substantive results back. Only share task-relevant context.
 5. A recorded or routed message is not an executed task. Use actual replies as evidence. Read subsequent replies using next_after; yield after handing off rather than busy-polling. Report offline, denied, unrouted, and failed operations explicitly.
-6. Return the final findings to the original user channel. Leave targets empty for an informational report so mentioning an agent in the text does not wake it again. Do not dispatch acknowledgments or thanks.
+6. Return the final findings and the group link to the original user channel. Leave targets empty for an informational report so mentioning an agent in the text does not wake it again. Do not dispatch acknowledgments or thanks.
+
+Use workspace_put_todos / workspace_get_todos (CLI: put-todos / get-todos) for planning. Update only your own list, assigning work only to participants. Use the collaboration tools for discovery, profiles, group creation, messages, history, and planning. Do not replace them with raw HTTP/curl, edit connector/other agents' configuration, or use another agent's local directory to work around a missing capability. If an operation fails, report the error instead of bypassing it. Generic REST instructions for other Workspace resources do not override this rule.
 
 Specialists use their own host-local tools, knowledge, and large files. Exchange small summaries or explicitly authorized resources; do not automatically upload source data to Workspace. Shared message content is stored by Workspace.
 

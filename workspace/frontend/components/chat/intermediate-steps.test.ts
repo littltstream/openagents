@@ -1,6 +1,11 @@
-import { expect, it } from 'vitest';
-import { hasCollapsedSteps } from './intermediate-steps';
+import { expect, it, vi } from 'vitest';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { hasCollapsedSteps, IntermediateSteps } from './intermediate-steps';
 import type { WorkspaceMessage } from '@/lib/types';
+
+vi.mock('@/lib/i18n', () => ({ useT: () => (key: string) => key }));
+vi.mock('@/components/agents/agent-avatar', () => ({ AgentAvatar: () => null }));
 
 let seq = 0;
 const msg = (messageType: string, content: string, senderName = 'kimi'): WorkspaceMessage => ({
@@ -30,4 +35,19 @@ it('offers earlier tool steps of a run still in progress', () => {
 
 it('offers the steps of a finished run, which the latest-only view hides', () => {
   expect(hasCollapsedSteps([msg('chat', 'go', 'You'), msg('status', '**Running:** `ls`'), msg('chat', 'done')])).toBe(true);
+});
+
+it('keeps a trailing completed checklist without restarting the working bubble after a reply', () => {
+  const checklist = { ...msg('todos', 'All tasks complete'), metadata: {
+    todos: [{ content: 'Report results to the original conversation', status: 'completed' }],
+  } };
+  const html = renderToStaticMarkup(createElement(IntermediateSteps, { steps: [checklist], isActive: true }));
+  expect(html).toContain('Report results to the original conversation');
+  expect(html).not.toContain('working-bubble');
+});
+
+it('still shows execution in progress when a checklist follows a real working status', () => {
+  const steps = [msg('status', '**Running:** `analyze`'), msg('todos', 'Planning')];
+  const html = renderToStaticMarkup(createElement(IntermediateSteps, { steps, isActive: true }));
+  expect(html).toContain('working-bubble');
 });

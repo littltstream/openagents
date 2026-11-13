@@ -325,7 +325,10 @@ export const IntermediateSteps = memo(function IntermediateSteps({ steps, agents
   const t = useT();
   if (steps.length === 0) return null;
   const hasTerminalStatus = steps.some(isTerminalStatus);
-  const active = isActive && !hasTerminalStatus;
+  // Checklist updates can arrive after the final reply, including from another
+  // collaboration thread. A trailing checklist is not an execution signal.
+  const hasExecutionStep = steps.some((step) => step.messageType === 'status' || step.messageType === 'thinking');
+  const active = isActive && hasExecutionStep && !hasTerminalStatus;
 
   // While the agent is active its most recent status / tool step moves into
   // the working bubble ("bubble with live status") instead of rendering as its

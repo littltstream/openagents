@@ -13,6 +13,7 @@ async function main() {
     channelName: process.env.OA_CHANNEL_NAME,
   };
   const coordinator = new CollaborationClient({ ...connection, agentName: 'agent-alpha' });
+  await coordinator.putTodos({ todos: [{ content: 'Discover a specialist', status: 'in_progress' }] });
   if (connection.channelName.startsWith('dm:')) {
     await assert.rejects(() => coordinator.getMessages({ channel: 'dm:human:unrelated@example.test' }), /direct conversation/i);
   }
@@ -29,6 +30,10 @@ async function main() {
   assert.equal(card.agent_name, 'agent-beta');
   assert.equal(card.description, 'CSV chip test analysis');
   const group = await coordinator.createGroup({ title: 'Collaboration backend test', participants: ['agent-beta'] });
+  assert.ok(group.url.endsWith(`/threads/${group.channel_id}`));
+  assert.equal((await coordinator._get(`/v1/thread-links/${group.channel_id}`, {})).session_id, group.channel);
+  await coordinator.putTodos({ channel: group.channel, todos: [{ content: 'Analyze the specialist data', status: 'pending', assignee: 'agent-beta' }] });
+  assert.equal((await coordinator.getTodos({ channel: group.channel })).todos[0].assignee, 'agent-beta');
   const task = await coordinator.sendMessage({ channel: group.channel, targets: ['agent-beta'], content: 'Return a test acknowledgment to agent-alpha.' });
   assert.equal(task.status, 'routed');
   const specialist = new CollaborationClient({ ...connection, agentName: 'agent-beta', channelName: group.channel,
@@ -49,7 +54,7 @@ async function main() {
   const final = await fresh.sendMessage({ channel: reply.collaboration.origin_channel, targets: [], content: 'Backend collaboration flow verified.' });
   const original = await fresh.getMessages({ channel: connection.channelName });
   assert.ok(original.messages.some((m) => m.id === final.event_id));
-  process.stdout.write(JSON.stringify({ group: group.channel, private: group.visibility === 'private', origin_recovered: true, returned_to_user_channel: true, final_event_id: final.event_id }));
+  process.stdout.write(JSON.stringify({ group: group.channel, private: group.visibility === 'private', origin_recovered: true, returned_to_user_channel: true, final_event_id: final.event_id, human_participants: group.human_participants }));
 }
 
 main().catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });

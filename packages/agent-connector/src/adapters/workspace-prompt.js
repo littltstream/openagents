@@ -292,7 +292,8 @@ function buildApiSkillsPrompt({ endpoint, workspaceId, token, agentName, channel
     `**HOW TO USE:** Call your \`${execTool}\` tool to run the \`curl\` commands below. ` +
     `Do NOT output curl commands as text — EXECUTE them with \`${execTool}\`.\n\n` +
     '**IMPORTANT — tool priority:**\n' +
-    `- ALWAYS use \`${execTool}\` + \`curl\` (documented below) for workspace operations.\n` +
+    '- For agent discovery, profiles, collaboration groups/messages/history, and todos, use the Agent Collaboration CLI below. Do not use raw HTTP for those operations.\n' +
+    `- Use \`${execTool}\` + \`curl\` only for other workspace resources documented below. If a collaboration tool fails, report the failure rather than bypassing it.\n` +
     '- Do NOT use `workspace_browser_*` native tools — they are not configured ' +
     'and will fail.\n' +
     '- Do NOT use `web_fetch`, `browser`, or any native browsing tool ' +
@@ -506,14 +507,8 @@ function buildApiSkillsPrompt({ endpoint, workspaceId, token, agentName, channel
     sections.push(s);
   }
 
-  // Message history
-  sections.push(
-    '\n### Message History\n\n' +
-    '**Get recent messages in the current channel:**\n' +
-    `\`${curl} -s -H "${h}" "${baseUrl}/v1/events?network=${workspaceId}&channel=${channelName}&type=workspace.message&sort=desc&limit=20"\`\n\n` +
-    '**Get messages from a specific channel:**\n' +
-    `\`${curl} -s -H "${h}" "${baseUrl}/v1/events?network=${workspaceId}&channel=CHANNEL_NAME&type=workspace.message&sort=desc&limit=20"\`\n`
-  );
+  // Message history uses the same validated transport as collaboration.
+  sections.push('\n### Message History\n\nUse `get-messages` in the Agent Collaboration CLI section with the current or specified channel. Do not call the events API directly for history.\n');
 
   // Post status update
   if (!isPlan) {
@@ -540,15 +535,7 @@ function buildApiSkillsPrompt({ endpoint, workspaceId, token, agentName, channel
       'Only your own `in_progress` tasks may automatically continue after a reply; ' +
       'pending tasks stay visible but do not wake you. When the required input arrives, ' +
       'mark the relevant task `in_progress` and resume it.\n\n' +
-      '**Update your to-do list:**\n' +
-      `\`${curl} -s -X PUT -H "${h}" -H "Content-Type: application/json" ` +
-      `${baseUrl}/v1/todos -d '{"todos":[` +
-      `{"content":"First task","status":"in_progress"},` +
-      `{"content":"Second task","status":"pending"}` +
-      `],"network":"${workspaceId}","channel":"${channelName}",` +
-      `"source":"openagents:${agentName}"}'\`\n\n` +
-      '**Get your to-do list:**\n' +
-      `\`${curl} -s -H "${h}" "${baseUrl}/v1/todos?network=${workspaceId}&channel=${channelName}&source=openagents%3A${encodeURIComponent(agentName)}"\`\n\n` +
+      '**Update/read your to-do list:** use `put-todos` / `get-todos` in the Agent Collaboration CLI section. Do not call `/v1/todos` directly.\n\n' +
       '**IMPORTANT:** When you receive a task with multiple steps or a list of things to do, ' +
       'ALWAYS create a to-do list first before starting work. This lets the user see your ' +
       'progress in real time. Update statuses as you work through each item.\n' +
@@ -687,30 +674,10 @@ function buildApiSkillsPrompt({ endpoint, workspaceId, token, agentName, channel
     );
   }
 
-  // Discovery
-  sections.push(
-    '\n### Discover Agents\n\n' +
-    'Before delegating, look up who is available and what they do — match the ' +
-    'task to an agent by its `description`.\n\n' +
-    '**List all agents in the workspace (with descriptions, roles, status):**\n' +
-    `\`${curl} -s -H "${h}" ${baseUrl}/v1/discover?network=${workspaceId}\`\n` +
-    'The response has `agents[]` (each with `address` `openagents:<name>`, ' +
-    '`description`, `role`, `status`, `agent_type`) and `channels[]` (each with ' +
-    'an `address` `channel/<name>` and a `participants` list of agent names).\n\n' +
-    '**To list the agents in THIS channel with their descriptions:** call ' +
-    'discover, find the entry in `channels[]` whose `address` is ' +
-    `\`channel/${channelName}\`, then keep the \`agents[]\` whose name is in ` +
-    'that channel\'s `participants`. Example:\n' +
-    `\`${curl} -s -H "${h}" ${baseUrl}/v1/discover?network=${workspaceId} | ` +
-    'jq --arg ch "channel/' + channelName + '" \'' +
-    '(.data.channels[]|select(.address==$ch).participants) as $p | ' +
-    '.data.agents[]|select((.address|sub("openagents:";"")) as $n|$p|index($n))|' +
-    '{name:(.address|sub("openagents:";"")),description,role,status}\'`\n' +
-    '(Discovery is workspace-wide — there is no per-channel discover endpoint, ' +
-    'so cross-reference `participants` yourself as shown.)\n'
-  );
+  // Discovery is scoped and filtered by the collaboration client.
+  sections.push('\n### Discover Agents\n\nUse `discover` and `profile` in the Agent Collaboration CLI section. Select specialists using their published descriptions and availability; do not call discovery or profile APIs directly.\n');
 
-  sections.push(buildCliSection({ endpoint, workspaceId, agentName, channelName, mode, isWindows }));
+  sections.push(buildCliSection({ endpoint, workspaceId, agentName, channelName, mode, isWindows, todosEnabled: !disabled.has('todos') }));
   return sections.join('\n');
 }
 

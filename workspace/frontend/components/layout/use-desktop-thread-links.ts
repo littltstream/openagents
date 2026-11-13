@@ -46,7 +46,11 @@ export function useDesktopThreadLinks(): void {
       if (!(anchor instanceof HTMLAnchorElement)) return;
       const { workspace: current } = latest.current;
       if (!current) return;
-      const href = anchor.href;
+      // The collaboration CLI returns a frontend-relative path. In the bundled
+      // app anchor.href otherwise resolves to openagents://, not the web origin.
+      const raw = anchor.getAttribute('href') || '';
+      const href = raw.startsWith('/') && !raw.startsWith('//')
+        ? new URL(raw, shareOrigin()).href : anchor.href;
       const link = workspaceThreadLink(href, [shareOrigin()], [current.slug, current.workspaceId].filter(Boolean) as string[]);
       if (!link) return;
       event.preventDefault();

@@ -10,13 +10,14 @@ const commands = {
   discover: 'workspace_discover_agents', profile: 'workspace_get_agent_profile',
   'create-group': 'workspace_create_group', 'send-message': 'workspace_send_message',
   'get-messages': 'workspace_get_messages',
+  'put-todos': 'workspace_put_todos', 'get-todos': 'workspace_get_todos',
 };
 
 const HELP = `Workspace collaboration (source checkout; Node.js 18+)
 
 node packages/agent-collaboration/bin/collaboration.js <command> [options]
 
-Commands: discover, profile, create-group, send-message, get-messages
+Commands: discover, profile, create-group, send-message, get-messages, put-todos, get-todos
 Business arguments: --args-file <UTF-8 JSON file>
 Discover also accepts: --query <keywords> --available-only
 

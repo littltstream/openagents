@@ -33,10 +33,11 @@ async function fixture(t) {
       { address: 'openagents:Denied', status: 'online', can_start_thread: false, description: 'CSV' },
     ],
     channels: [
-      { address: 'channel/general', participants: ['Agent_B'], visibility: 'private' },
+      { address: 'channel/general', participants: ['Agent_B'], visibility: 'private', owner_email: 'owner@example.test' },
       { address: 'channel/readable', participants: ['Agent_A'], visibility: 'public' },
     ],
     directMessages: [],
+    todos: new Map(),
     messages: [
       { id: 'event-1', source: 'openagents:Agent_A', timestamp: 1, payload: { content: 'first' } },
       { id: 'event-2', source: 'openagents:Agent_A', timestamp: 2, payload: { content: 'second' } },
@@ -56,6 +57,13 @@ async function fixture(t) {
     if (state.error === 'envelope') return reply(null, 200, 403);
     if (state.error === 'html') { res.writeHead(502); return res.end('<html>proxy failed</html>'); }
     if (url.pathname === '/v1/discover') return reply({ agents: state.agents, channels: state.channels });
+    if (url.pathname === '/v1/todos') {
+      if (req.method === 'PUT') {
+        state.todos.set(`${body.channel}:${body.source}`, body.todos.map((item) => ({ ...item, created_by: body.source })));
+        return reply({ todos: state.todos.get(`${body.channel}:${body.source}`) });
+      }
+      return reply({ todos: state.todos.get(`${url.searchParams.get('channel')}:${url.searchParams.get('source')}`) || [] });
+    }
     if (url.pathname.endsWith('/profile')) return reply({ agent_name: 'Agent_A', purpose: 'CSV tests',
       availability: { reason: 'available', runtime_name: 'PRIVATE HOST', busy_channels: ['private-channel'] },
       shared_instructions: 'DO NOT EXPOSE', allowed_knowledge: ['PRIVATE'] });
@@ -78,7 +86,7 @@ async function fixture(t) {
       state.writes.push(body);
       if (body.type === 'network.channel.create') {
         const name = `group-${++state.groups}`;
-        state.channels.push({ address: `channel/${name}`, participants: body.payload.participants, visibility: 'private' });
+        state.channels.push({ address: `channel/${name}`, participants: body.payload.participants, visibility: 'private', owner_email: body.payload.owner_email });
         const creation = { id: `created-${state.groups}`, ...body,
           metadata: { ...body.metadata, channel_name: name, channel_id: `id-${name}`, visibility: 'private' } };
         state.creations.set(name, creation);
@@ -167,6 +175,8 @@ test('dynamic teams, explicit dispatch, and informational reports reuse the exis
   assert.deepEqual(group.participants, ['Agent_B', 'Agent_A', 'Agent_C']);
   assert.equal(group.origin_channel, 'general');
   assert.equal(group.visibility, 'private');
+  assert.deepEqual(group.human_participants, ['owner@example.test']);
+  assert.equal(group.url, '/ws-1/threads/id-group-1');
   assert.equal(client.channelName, 'general', 'creating a team must not lose the user conversation');
   const created = state.writes[0];
   assert.equal(created.network, 'ws-1');
@@ -175,6 +185,9 @@ test('dynamic teams, explicit dispatch, and informational reports reuse the exis
   assert.equal(created.target, 'core');
   assert.equal(created.payload.visibility, 'private');
   assert.equal(created.payload.master, 'Agent_B');
+  assert.deepEqual(created.payload.human_participants, ['owner@example.test']);
+  assert.equal(created.payload.owner_email, 'owner@example.test');
+  assert.equal('human_access' in created.metadata.collaboration, false);
   assert.equal('resume_from' in created.payload, false);
   assert.equal(created.metadata.collaboration.origin_channel, 'general');
   const routed = await client.sendMessage({ channel: group.channel, content: 'Analyze your host-local CSV', targets: ['Agent_A'] });
@@ -202,6 +215,20 @@ test('unrouted dispatch is an error containing the recorded event receipt', asyn
     return true;
   });
   assert.equal(state.writes.length, 2, 'must not retry a recorded message');
+});
+
+test('a shared-origin requester gains visibility without accepting an arbitrary email from tool arguments', async (t) => {
+  const { ws, state } = await fixture(t);
+  state.messages.push({ id: 'human-request', source: 'human:requester@example.test',
+    payload: { content: 'Delegate my task', sender_email: 'requester@example.test' } });
+  const client = new CollaborationClient({ wsClient: ws, workspaceId: 'ws-1', agentName: 'Agent_B', token: TOKEN,
+    channelName: 'general', triggerId: 'human-request', triggerChannel: 'general' });
+  const group = await client.createGroup({ title: 'Shared-origin team', participants: ['Agent_A'] });
+  assert.deepEqual(group.human_participants, ['owner@example.test', 'requester@example.test']);
+  assert.deepEqual(state.writes[0].payload.human_participants, group.human_participants);
+  state.messages.length = 0;
+  await assert.rejects(() => client.createGroup({ title: 'Missing requester', participants: ['Agent_A'] }), /triggering event/);
+  assert.equal(state.writes.length, 1);
 });
 
 test('specialist and fresh coordinator sessions recover the origin without sharing local session files', async (t) => {
@@ -243,6 +270,7 @@ test('direct user conversations can create teams, recover the origin, and receiv
   const client = new CollaborationClient({ wsClient: ws, workspaceId: 'ws-1', agentName: 'Agent_B', token: TOKEN, channelName: origin });
   const group = await client.createGroup({ title: 'DM-origin team', participants: ['Agent_A'] });
   assert.equal(group.origin_channel, origin);
+  assert.deepEqual(group.human_participants, ['owner@example.test']);
   await client.sendMessage({ channel: group.channel, targets: ['Agent_A'], content: 'Compute locally' });
   const specialist = new CollaborationClient({ wsClient: ws, workspaceId: 'ws-1', agentName: 'Agent_A', token: TOKEN, channelName: group.channel });
   assert.deepEqual((await specialist.getMessages({ channel: group.channel })).collaboration, { coordinator: 'Agent_B', origin_channel: origin });
@@ -400,6 +428,48 @@ test('skills-mode uses the actual CLI and adapter credentials without putting th
   const plan = buildApiSkillsPrompt({ ...args, token: TOKEN, mode: 'plan' });
   assert.equal(plan.includes('create-group --args-file'), false);
   assert.equal(plan.includes('send-message --args-file'), false);
+  const execute = buildApiSkillsPrompt({ ...args, token: TOKEN });
+  assert.match(execute, /put-todos --args-file/);
+  assert.match(execute, /get-todos/);
+  assert.match(execute, /查看协作过程/);
+  assert.doesNotMatch(execute, /curl(?:\.exe)?[^\n]*\/v1\/(?:todos|discover)/);
+  assert.doesNotMatch(execute, /curl(?:\.exe)?[^\n]*\/v1\/events\?[^\n]*sort=desc/);
+  assert.doesNotMatch(execute, /ALWAYS use.*curl.*workspace operations/);
+});
+
+test('planning uses the same scoped implementation through CLI and MCP, with explicit failures', async (t) => {
+  const { client, state, endpoint, ws } = await fixture(t);
+  const group = await client.createGroup({ title: 'Planning team', participants: ['Agent_A'] });
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'oa-planning-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'todos.json');
+  const args = { channel: group.channel, todos: [{ content: 'Run local CSV analysis', status: 'pending', assignee: 'Agent_A' }] };
+  fs.writeFileSync(file, JSON.stringify(args));
+  const env = { OA_WORKSPACE_ENDPOINT: endpoint, OA_WORKSPACE_ID: 'ws-1', OA_AGENT_NAME: 'Agent_B', OA_WORKSPACE_TOKEN: TOKEN, OA_CHANNEL_NAME: group.channel };
+  const put = await child(CLI, ['put-todos', '--args-file', file], env);
+  assert.equal(put.code, 0, put.stderr);
+  assert.equal(JSON.parse(put.stdout).todos[0].created_by, 'openagents:Agent_B');
+  const server = new McpServer({ wsClient: ws, workspaceId: 'ws-1', agentName: 'Agent_B', token: TOKEN, channelName: group.channel });
+  const read = await server._dispatch('workspace_get_todos', {});
+  assert.equal(read.structuredContent.todos[0].content, 'Run local CSV analysis');
+  const putRequest = state.requests.find((r) => r.method === 'PUT');
+  assert.equal(putRequest.headers['x-agent-name'], 'Agent_B');
+  assert.equal(putRequest.body.source, 'openagents:Agent_B');
+  assert.equal(putRequest.body.channel, group.channel);
+  for (const todo of [{ content: 'bad status', status: 'done' }, { content: 'wrong owner', status: 'pending', assignee: 'Agent_D' }, { content: 'injected', status: 'pending', source: 'openagents:Agent_A' }]) {
+    await assert.rejects(() => callTool(client, 'workspace_put_todos', { channel: group.channel, todos: [todo] }));
+  }
+  await assert.rejects(() => client.putTodos({ channel: 'readable', todos: [] }), /participant/);
+  assert.equal(state.requests.filter((r) => r.method === 'PUT').length, 1);
+  const cleared = await server._dispatch('workspace_put_todos', { todos: [] });
+  assert.deepEqual(cleared.structuredContent.todos, []);
+  const names = buildToolDefs(new Set(['todos'])).map((tool) => tool.name);
+  assert.equal(names.includes('workspace_put_todos'), false);
+  assert.equal(names.includes('workspace_get_todos'), false);
+  state.error = 'http';
+  const denied = await server._dispatch('workspace_put_todos', { todos: [] });
+  assert.equal(denied.isError, true);
+  assert.equal(denied.structuredContent.status, 403);
 });
 
 test('concurrent adapter turns carry their exact trigger through the actual CLI without leaking across channels', async (t) => {

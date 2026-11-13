@@ -166,28 +166,96 @@ class CollaborationClient {
     return { coordinator: agentName(context.coordinator), origin_channel: channelName(context.origin_channel) };
   }
 
+  async _humanParticipants(origin, original) {
+    const emails = new Set();
+    const add = (email) => {
+      if (typeof email !== 'string' || !/^[^@\s]+@[^@\s]+$/u.test(email.trim())) {
+        throw new Error('The origin has no supported account email; cannot grant the user access to a private team');
+      }
+      emails.add(email.trim().toLowerCase());
+    };
+    if (origin.startsWith('dm:human:')) add(origin.slice('dm:human:'.length));
+    else if (original.owner_email) add(original.owner_email);
+    // A shared origin may belong to someone other than this task's requester.
+    // Read the exact triggering event from the server, not an LLM-provided email.
+    if (!origin.startsWith('dm:') && this.triggerId && this.triggerChannel === origin) {
+      const data = await this._get('/v1/events', { channel: origin, type: 'workspace.message.posted', sort: 'desc', limit: '500',
+        exclude_message_types: 'status,thinking,todos,loading' });
+      if (!data || !Array.isArray(data.events)) throw new Error('Invalid origin history response');
+      const trigger = data.events.find((event) => event.id === this.triggerId);
+      if (!trigger) throw new Error('The triggering event is not visible in the origin history; no group was created');
+      if (trigger.source?.startsWith('human:')) {
+        const payload = trigger.payload || {}, metadata = trigger.metadata || {};
+        add(payload.sender_email || metadata.sender_email || payload.sender_id || trigger.source.slice(6));
+      }
+    }
+    return [...emails];
+  }
+
   async createGroup({ title, participants, origin_channel } = {}) {
     const groupTitle = text(title, 'title');
     const selected = names(participants, 'participants').filter((n) => n !== this.agentName);
     if (!selected.length) throw new Error('Select at least one other agent');
     const origin = channelName(origin_channel || this.channelName);
     const discovery = await this._discover();
-    await this._conversation(discovery, origin, true);
+    const original = await this._conversation(discovery, origin, true);
     for (const name of selected) {
       const member = discovery.agents.find((a) => a.address === `openagents:${name}`);
       if (!member || member.can_start_thread !== true) throw new Error(`Agent ${name} is not available for a new collaboration with this identity`);
     }
     const members = [this.agentName, ...selected];
+    // Identity comes from the server-visible origin, never a tool-supplied email.
+    const humans = await this._humanParticipants(origin, original);
     const event = await this._event({
       type: 'network.channel.create', source: `openagents:${this.agentName}`, target: 'core',
-      payload: { title: groupTitle, participants: members, master: this.agentName, visibility: 'private' },
+      payload: { title: groupTitle, participants: members, master: this.agentName, visibility: 'private',
+        human_participants: humans, ...(humans.length ? { owner_email: humans[0] } : {}) },
       metadata: { collaboration: { coordinator: this.agentName, origin_channel: origin } },
     });
-    if (!event.metadata || typeof event.metadata.channel_name !== 'string' || event.metadata.visibility !== 'private') {
+    if (!event.metadata || typeof event.metadata.channel_name !== 'string'
+      || typeof event.metadata.channel_id !== 'string' || !event.metadata.channel_id || event.metadata.visibility !== 'private') {
       throw new Error(`Group receipt is incomplete (${event.id}); check existing channels before retrying`);
     }
     return { channel: event.metadata.channel_name, channel_id: event.metadata.channel_id,
-      event_id: event.id, participants: members, visibility: 'private', origin_channel: origin };
+      event_id: event.id, participants: members, human_participants: humans, visibility: 'private', origin_channel: origin,
+      url: this._threadUrl(event.metadata.channel_id) };
+  }
+
+  _threadUrl(name) {
+    // Canonical frontend route, relative to the current Workspace UI. Never
+    // derive a browser origin from the API host or include access credentials.
+    return `/${encodeURIComponent(this.workspaceId)}/threads/${encodeURIComponent(name)}`;
+  }
+
+  async getTodos({ channel = this.channelName, all = false, agent } = {}) {
+    const name = channelName(channel);
+    if (typeof all !== 'boolean') throw new Error('Invalid all filter');
+    const discovery = await this._discover();
+    await this._conversation(discovery, name, true);
+    const data = unwrap(await this.ws.getTodos(this.workspaceId, name, this.token, {
+      all, ...(agent ? { agent: agentName(agent) } : {}), source: `openagents:${this.agentName}`,
+    }));
+    if (!data || !Array.isArray(data.todos)) throw new Error('Invalid todos response');
+    return { channel: name, todos: data.todos };
+  }
+
+  async putTodos({ channel = this.channelName, todos } = {}) {
+    const name = channelName(channel);
+    if (!Array.isArray(todos)) throw new Error('todos must be an array');
+    const discovery = await this._discover();
+    const group = await this._conversation(discovery, name, true);
+    const items = todos.map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)
+        || Object.keys(item).some((key) => !['content', 'status', 'assignee'].includes(key))) throw new Error('Invalid todo item');
+      const content = text(item.content, 'todo content');
+      if (!['pending', 'in_progress', 'completed'].includes(item.status)) throw new Error('Invalid todo status');
+      const assignee = item.assignee ? agentName(item.assignee) : this.agentName;
+      if (!(group.participants || []).includes(assignee)) throw new Error('Todo assignee must be a conversation participant');
+      return { content, status: item.status, assignee };
+    });
+    const data = unwrap(await this.ws.putTodos(this.workspaceId, name, this.token, items, { source: `openagents:${this.agentName}` }));
+    if (!data || !Array.isArray(data.todos)) throw new Error('Invalid todos receipt; inspect the list before retrying');
+    return { channel: name, todos: data.todos };
   }
 
   async sendMessage({ channel, content, targets = [] } = {}) {
@@ -240,7 +308,8 @@ class CollaborationClient {
     const events = after ? data.events : data.events.slice().reverse();
     const messages = events.map((e) => ({ id: e.id, source: e.source, timestamp: e.timestamp,
       content: e.payload && e.payload.content, attachments: e.payload && e.payload.attachments }));
-    return { channel: name, collaboration, messages, next_after: messages.length ? messages[messages.length - 1].id : (after || null) };
+    return { channel: name, ...(!name.startsWith('dm:') ? { url: this._threadUrl(name) } : {}),
+      collaboration, messages, next_after: messages.length ? messages[messages.length - 1].id : (after || null) };
   }
 }
 

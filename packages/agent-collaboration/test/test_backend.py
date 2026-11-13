@@ -113,6 +113,7 @@ def test_real_backend_collaboration(backend_context, origin_kind):
 
             do_GET = dispatch
             do_POST = dispatch
+            do_PUT = dispatch
 
             def log_message(self, *args):
                 pass
@@ -135,6 +136,14 @@ def test_real_backend_collaboration(backend_context, origin_kind):
             final = db.execute(select(EventRecord).where(EventRecord.id == report["final_event_id"])).scalar_one()
             assert final.visibility == "direct"
             assert final.target == "human:requester@example.test"
+            from app.models import Channel
+            from app.services.access_model import Principal, allowed, can_view_channel, resource_for_channel
+            group = db.execute(select(Channel).where(Channel.workspace_id == workspace["id"], Channel.name == report["group"])).scalar_one()
+            assert report["human_participants"] == ["requester@example.test"]
+            assert can_view_channel(db, workspace["id"], Principal("human", email="requester@example.test", workspace_id=workspace["id"]), group)
+            assert allowed(db, Principal("human", email="requester@example.test", workspace_id=workspace["id"]), resource_for_channel(group), "act", workspace["id"])
+            assert not can_view_channel(db, workspace["id"], Principal("human", email="unrelated@example.test", workspace_id=workspace["id"]), group)
+            assert not db.execute(select(Channel).where(Channel.workspace_id == workspace["id"], Channel.name.like("dm:%"))).scalars().all()
     finally:
         if server is not None:
             server.shutdown()

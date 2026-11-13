@@ -14,6 +14,8 @@ handlers. No additional HTTP service, database, model, or dependencies are neede
 | `workspace_create_group` | `create-group` | `title`, `participants`, optional `origin_channel` |
 | `workspace_send_message` | `send-message` | `channel`, `content`, optional `targets` |
 | `workspace_get_messages` | `get-messages` | `channel`, optional `after`, `limit` |
+| `workspace_put_todos` | `put-todos` | `todos` (full list of `content`, `status`, optional `assignee`), optional `channel` |
+| `workspace_get_todos` | `get-todos` | Optional `channel`, `all`, `agent` |
 
 Discovery returns published capabilities, not host directories, private tools or
 knowledge. Keyword filtering is literal (space-separated terms must all match).
@@ -26,7 +28,21 @@ Creating a group includes the coordinator automatically and explicitly requests
 private visibility. It rechecks the selected agents against fresh discovery and
 returns the original user channel. It does not clone a session, copy history,
 dispatch a task, or upload data. Source identity and credentials cannot be set
-through tool arguments.
+through tool arguments. The server-returned origin channel owner (or the human
+peer of a verified native DM) is added as a human participant and owner. When a
+human triggers the task in a shared channel, their identity is also resolved from
+that exact server-visible event and added as a participant, so the
+user can observe the private group without making it workspace-public. Agent-only
+origins without a human owner remain agent-only; no user email is guessed.
+The receipt includes a credential-free frontend `url`, using the canonical
+`/<workspace>/threads/<channel>` route relative to the Workspace UI. Post it as
+`[查看协作过程](url)` in the original conversation immediately, and retain it in
+the final report. It is not an API URL and grants no access by itself.
+
+Planning uses the existing Workspace todos API through the same scoped client in
+both CLI and MCP. Writes always identify the caller and replace only their own
+list. Assignments are restricted to conversation participants. Errors remain
+errors; an agent must not replace a failed tool call with a raw HTTP request.
 
 The origin may also be a native direct conversation, such as
 `dm:human:owner@example.test`. DMs are not group channels: the client verifies
@@ -62,7 +78,7 @@ node packages/agent-connector/bin/agent-connector.js --help
 node packages/agent-collaboration/bin/collaboration.js --help
 ```
 
-The connector's existing MCP server exposes the five tools. Claude MCP mode's
+The connector's existing MCP server exposes the seven tools. Claude MCP mode's
 allowlist includes the read tools in plan mode and write tools in execute mode.
 The shared Workspace prompt/skill generator adds collaboration instructions and
 CLI usage for skill-driven adapters, including Codex and OpenClaw. Child processes

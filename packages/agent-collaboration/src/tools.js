@@ -20,7 +20,7 @@ const defs = [
   },
   {
     name: 'workspace_create_group',
-    description: 'Create a private collaboration group with selected agents. Automatically includes you as coordinator. Saves the originating user channel in the receipt. Creation does not dispatch a task; use workspace_send_message next.',
+    description: 'Create a private collaboration group with selected agents and the verified origin owner as a human member. Returns a frontend url: share it as [View collaboration](url) in the original conversation. Creation does not dispatch a task; use workspace_send_message next.',
     inputSchema: { type: 'object', additionalProperties: false, properties: {
       title: string, participants: { ...agents, minItems: 1 },
       origin_channel: { ...string, description: 'Original user channel or native dm:<peer address> conversation; defaults to the current conversation. No session history is copied.' },
@@ -40,14 +40,29 @@ const defs = [
       channel: string, after: string, limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
     }, required: ['channel'] },
   },
+  {
+    name: 'workspace_put_todos',
+    description: 'Replace your own entire to-do list in the current or specified conversation. Send the full list; assign only conversation participants. Do not use raw HTTP for planning.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {
+      channel: string, todos: { type: 'array', items: { type: 'object', additionalProperties: false,
+        properties: { content: string, status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] }, assignee: string },
+        required: ['content', 'status'] } },
+    }, required: ['todos'] },
+  },
+  {
+    name: 'workspace_get_todos',
+    description: 'Read your to-do list in the current or specified conversation. all=true reads all participants; agent filters by assignee.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { channel: string, all: { type: 'boolean' }, agent: string } },
+  },
 ];
 
 const methods = {
   workspace_discover_agents: 'discover', workspace_get_agent_profile: 'profile',
   workspace_create_group: 'createGroup', workspace_send_message: 'sendMessage', workspace_get_messages: 'getMessages',
+  workspace_put_todos: 'putTodos', workspace_get_todos: 'getTodos',
 };
-const readToolNames = ['workspace_discover_agents', 'workspace_get_agent_profile', 'workspace_get_messages'];
-const writeToolNames = ['workspace_create_group', 'workspace_send_message'];
+const readToolNames = ['workspace_discover_agents', 'workspace_get_agent_profile', 'workspace_get_messages', 'workspace_get_todos'];
+const writeToolNames = ['workspace_create_group', 'workspace_send_message', 'workspace_put_todos'];
 
 // MCP and CLI share validation, so neither interface can inject endpoint,
 // credentials, source identity, owner email, or arbitrary event payloads.
@@ -61,7 +76,7 @@ function validate(name, args) {
     const field = schema.properties[key];
     if (!field) throw new Error(`Unsupported argument: ${key}`);
     const type = field.type;
-    if ((type === 'array' && (!Array.isArray(value) || value.some((v) => typeof v !== 'string' || !v.trim())))
+    if ((type === 'array' && (!Array.isArray(value) || (field.items.type === 'string' && value.some((v) => typeof v !== 'string' || !v.trim()))))
       || (type === 'integer' && (!Number.isInteger(value) || value < field.minimum || value > field.maximum))
       || (['string', 'boolean'].includes(type) && typeof value !== type)
       || (type === 'string' && field.minLength && !value.trim())) throw new Error(`Invalid ${key}`);

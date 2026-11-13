@@ -35,6 +35,7 @@ jobs:
           done
       - run: npm ci --prefix packages/agent-connector
       - run: node --test packages/agent-collaboration/test/*.test.js
+      - run: node --test scripts/publish-chippilot-release.test.cjs
       - run: node --test --test-name-pattern=help packages/agent-connector/test/cli.test.js
       - run: node scripts/build-chippilot-cli.cjs
       - name: Test the installed archive independently of the checkout
