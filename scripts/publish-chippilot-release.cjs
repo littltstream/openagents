@@ -24,8 +24,14 @@ function publishRelease({ release, sha, output, files, notes, run = execFileSync
     gh(['release', 'create', release.tag, '--repo', release.repository, '--target', sha,
       '--title', `ChipPilot OpenAgents ${release.desktopVersion}`, '--notes-file', notes, '--draft']);
   }
-  gh(['release', 'upload', release.tag, '--repo', release.repository,
-    ...files.map(file => path.join(output, file)), '--clobber']);
+  const matches = (asset, file) => {
+    const bytes = fs.readFileSync(path.join(output, file));
+    return asset && asset.size === bytes.length
+      && asset.digest === 'sha256:' + crypto.createHash('sha256').update(bytes).digest('hex');
+  };
+  const pending = files.filter(file => !matches(existing?.assets.find(asset => asset.name === file), file));
+  if (pending.length) gh(['release', 'upload', release.tag, '--repo', release.repository,
+    ...pending.map(file => path.join(output, file)), '--clobber']);
 
   const uploaded = api(`releases/tags/${release.tag}`);
   for (const file of files) {
@@ -36,14 +42,17 @@ function publishRelease({ release, sha, output, files, notes, run = execFileSync
       throw new Error(`Uploaded release asset failed verification: ${file}`);
     }
   }
-  if (existing) gh(['api', '--method', 'PATCH', `${repo}/git/refs/tags/${release.tag}`, '-f', `sha=${sha}`, '-F', 'force=true']);
-  const tag = api(`git/ref/tags/${release.tag}`);
+  let tag = api(`git/ref/tags/${release.tag}`);
+  if (existing && tag.object.sha !== sha) {
+    gh(['api', '--method', 'PATCH', `${repo}/git/refs/tags/${release.tag}`, '-f', `sha=${sha}`, '-F', 'force=true']);
+    tag = api(`git/ref/tags/${release.tag}`);
+  }
   if (tag.object.sha !== sha) throw new Error('Release tag does not point to the build commit');
   for (const asset of uploaded.assets) {
     if (!files.includes(asset.name)) gh(['api', '--method', 'DELETE', `${repo}/releases/assets/${asset.id}`]);
   }
   gh(['api', '--method', 'PATCH', `${repo}/releases/${uploaded.id}`,
-    '-f', `tag_name=${release.tag}`, '-f', `target_commitish=${sha}`, '-F', 'draft=false',
+    '-f', `tag_name=${release.tag}`, '-F', 'draft=false',
     '-f', `name=ChipPilot OpenAgents ${release.desktopVersion}`, '-F', `body=@${notes}`, '-f', 'make_latest=true']);
   console.log(`Published ${release.repository} ${release.tag} from ${sha}`);
 }
