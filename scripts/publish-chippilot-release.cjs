@@ -17,14 +17,10 @@ function publishRelease({ release, sha, output, files, notes, run = execFileSync
   if (existing?.immutable) throw new Error('The existing release is immutable and cannot be replaced');
 
   // All platform builds and local asset checks have succeeded before this call.
-  // Hide the old release while replacing it so a mixed set is never published.
-  if (existing) {
-    // GitHub may rename an unpublished release to "untagged-*" unless the
-    // draft update explicitly carries its tag. Address all edits by release ID.
-    gh(['api', '--method', 'PATCH', `${repo}/releases/${existing.id}`,
-      '-F', 'draft=true', '-f', `tag_name=${release.tag}`, '-f', `target_commitish=${sha}`]);
-    gh(['api', '--method', 'PATCH', `${repo}/git/refs/tags/${release.tag}`, '-f', `sha=${sha}`, '-F', 'force=true']);
-  } else {
+  // Keep an existing published release accessible. Unpublishing it changes its
+  // tag and can hide it from a later Actions token. Move the tag only after
+  // every replacement asset has been verified.
+  if (!existing) {
     gh(['release', 'create', release.tag, '--repo', release.repository, '--target', sha,
       '--title', `ChipPilot OpenAgents ${release.desktopVersion}`, '--notes-file', notes, '--draft']);
   }
@@ -40,6 +36,7 @@ function publishRelease({ release, sha, output, files, notes, run = execFileSync
       throw new Error(`Uploaded release asset failed verification: ${file}`);
     }
   }
+  if (existing) gh(['api', '--method', 'PATCH', `${repo}/git/refs/tags/${release.tag}`, '-f', `sha=${sha}`, '-F', 'force=true']);
   const tag = api(`git/ref/tags/${release.tag}`);
   if (tag.object.sha !== sha) throw new Error('Release tag does not point to the build commit');
   for (const asset of uploaded.assets) {
