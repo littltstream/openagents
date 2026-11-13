@@ -5,6 +5,11 @@ on:
     branches: ['develop']
     paths: ['chippilot-release.json']
   workflow_dispatch:
+    inputs:
+      artifacts_run_id:
+        description: 'Reuse validated platform builds from this workflow run (publisher-only changes allowed)'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -15,6 +20,7 @@ concurrency:
 
 jobs:
   cli:
+    if: ${{ inputs.artifacts_run_id == '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -111,20 +117,31 @@ jobs:
           if-no-files-found: error
   publish:
     needs: [cli, desktop]
+    if: ${{ !cancelled() && (inputs.artifacts_run_id != '' || (needs.cli.result == 'success' && needs.desktop.result == 'success')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - run: node --test scripts/publish-chippilot-release.test.cjs
+      - name: Validate the source of reused platform builds
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACTS_RUN_ID: ${{ inputs.artifacts_run_id }}
+        run: node scripts/check-chippilot-artifacts.cjs
       - uses: actions/download-artifact@v4
         with:
           path: release-artifacts
+          run-id: ${{ inputs.artifacts_run_id || github.run_id }}
+          github-token: ${{ github.token }}
       - run: npm install --prefix "$RUNNER_TEMP/release-tools" --ignore-scripts --no-audit --no-fund js-yaml@4.1.0
       - name: Publish the CLI and all native desktop builds to this fork
         env:
           GH_TOKEN: ${{ github.token }}
           NODE_PATH: ${{ runner.temp }}/release-tools/node_modules
-        run: node scripts/publish-chippilot.cjs release-artifacts
+        run: node scripts/publish-chippilot.cjs release-artifacts "${{ steps.source.outputs.sha }}"

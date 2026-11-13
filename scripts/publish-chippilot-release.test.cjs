@@ -35,8 +35,9 @@ test('replaces an existing release only after upload and checksum verification, 
   assert.equal(calls.some(c => c.includes('create')), false);
   const upload = calls.findIndex(c => c[0] === 'release' && c[1] === 'upload');
   const remove = calls.findIndex(c => c.includes('DELETE'));
-  const publish = calls.findIndex(c => c.includes('--draft=false'));
-  assert.ok(calls.slice(0, upload).some(c => c.includes('--draft=true')));
+  const publish = calls.findIndex(c => c.includes('draft=false'));
+  const draft = calls.find(c => c.includes('draft=true'));
+  assert.ok(draft.includes('tag_name=v3') && draft.includes('repos/owner/repo/releases/1'));
   assert.ok(calls.slice(0, upload).some(c => c.includes(`sha=${args.sha}`) && c.includes('force=true')));
   assert.ok(upload < remove && remove < publish);
   assert.ok(calls[upload].includes('--clobber'));
@@ -45,7 +46,7 @@ test('replaces an existing release only after upload and checksum verification, 
 test('a digest mismatch leaves the replacement unpublished and does not delete old assets', t => {
   const { calls, args } = fixture(t, true);
   assert.throws(() => publishRelease(args), /failed verification/);
-  assert.equal(calls.some(c => c.includes('DELETE') || c.includes('--draft=false')), false);
+  assert.equal(calls.some(c => c.includes('DELETE') || c.includes('draft=false')), false);
 });
 
 test('authentication or network failures cannot be treated as a missing release', t => {

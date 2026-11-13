@@ -19,9 +19,11 @@ function publishRelease({ release, sha, output, files, notes, run = execFileSync
   // All platform builds and local asset checks have succeeded before this call.
   // Hide the old release while replacing it so a mixed set is never published.
   if (existing) {
-    gh(['release', 'edit', release.tag, '--repo', release.repository, '--draft=true']);
+    // GitHub may rename an unpublished release to "untagged-*" unless the
+    // draft update explicitly carries its tag. Address all edits by release ID.
+    gh(['api', '--method', 'PATCH', `${repo}/releases/${existing.id}`,
+      '-F', 'draft=true', '-f', `tag_name=${release.tag}`, '-f', `target_commitish=${sha}`]);
     gh(['api', '--method', 'PATCH', `${repo}/git/refs/tags/${release.tag}`, '-f', `sha=${sha}`, '-F', 'force=true']);
-    gh(['api', '--method', 'PATCH', `${repo}/releases/${existing.id}`, '-f', `target_commitish=${sha}`]);
   } else {
     gh(['release', 'create', release.tag, '--repo', release.repository, '--target', sha,
       '--title', `ChipPilot OpenAgents ${release.desktopVersion}`, '--notes-file', notes, '--draft']);
@@ -43,8 +45,9 @@ function publishRelease({ release, sha, output, files, notes, run = execFileSync
   for (const asset of uploaded.assets) {
     if (!files.includes(asset.name)) gh(['api', '--method', 'DELETE', `${repo}/releases/assets/${asset.id}`]);
   }
-  gh(['release', 'edit', release.tag, '--repo', release.repository,
-    '--title', `ChipPilot OpenAgents ${release.desktopVersion}`, '--notes-file', notes, '--draft=false', '--latest']);
+  gh(['api', '--method', 'PATCH', `${repo}/releases/${uploaded.id}`,
+    '-f', `tag_name=${release.tag}`, '-f', `target_commitish=${sha}`, '-F', 'draft=false',
+    '-f', `name=ChipPilot OpenAgents ${release.desktopVersion}`, '-F', `body=@${notes}`, '-f', 'make_latest=true']);
   console.log(`Published ${release.repository} ${release.tag} from ${sha}`);
 }
 
