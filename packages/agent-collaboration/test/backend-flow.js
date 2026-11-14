@@ -34,6 +34,11 @@ async function main() {
   assert.equal((await coordinator._get(`/v1/thread-links/${group.channel_id}`, {})).session_id, group.channel);
   await coordinator.putTodos({ channel: group.channel, todos: [{ content: 'Analyze the specialist data', status: 'pending', assignee: 'agent-beta' }] });
   assert.equal((await coordinator.getTodos({ channel: group.channel })).todos[0].assignee, 'agent-beta');
+  await coordinator.updateBrief({ channel: group.channel, objective: 'Specialist analysis', owner: 'openagents:agent-beta', open_questions: ['Await the result'] });
+  const brief = await coordinator.updateBrief({ channel: group.channel, latest_result: 'Task delegated', open_questions: [] });
+  assert.equal(brief.brief.objective, 'Specialist analysis');
+  assert.equal(brief.brief.updated_by, 'openagents:agent-alpha');
+  assert.deepEqual((await coordinator.getBrief({ channel: group.channel })).brief.open_questions, []);
   const task = await coordinator.sendMessage({ channel: group.channel, targets: ['agent-beta'], content: 'Return a test acknowledgment to agent-alpha.' });
   assert.equal(task.status, 'routed');
   const specialist = new CollaborationClient({ ...connection, agentName: 'agent-beta', channelName: group.channel,

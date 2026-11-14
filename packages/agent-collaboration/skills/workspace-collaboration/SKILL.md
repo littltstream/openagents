@@ -21,6 +21,8 @@ Use workspace_put_todos / workspace_get_todos (CLI: put-todos / get-todos) for p
 
 Specialists use their own host-local tools, knowledge, and large files. Exchange small summaries or explicitly authorized resources; do not automatically upload source data to Workspace. Shared message content is stored by Workspace.
 
+Keep the shared work brief current with workspace_update_brief (CLI: update-brief); read it with workspace_get_brief (CLI: get-brief). Pass channel to select the group or the original user thread. Update objective, latest_result, open_questions, next_step, and owner as needed; omitted fields stay unchanged, empty strings and [] clear them. Use owner (openagents:<agent> or human:<email>), not next_owner. Do not supply network, source, credentials, or call the brief HTTP endpoint yourself. Native direct conversations have no shared brief; report that limitation rather than inventing a group.
+
 For MCP, use workspace_discover_agents, workspace_get_agent_profile, workspace_create_group, workspace_send_message, and workspace_get_messages. For skill-driven runtimes, use the equivalent CLI operations documented in the current generated Workspace skill's Agent Collaboration section. The CLI receives credentials from the child environment, not from business arguments.
 
 Server-side authorization remains authoritative. Candidate visibility is not proof of permission to start a new thread. The tools recheck can_start_thread before creation, but do not establish a new user-delegation authorization system.

@@ -16,6 +16,8 @@ handlers. No additional HTTP service, database, model, or dependencies are neede
 | `workspace_get_messages` | `get-messages` | `channel`, optional `after`, `limit` |
 | `workspace_put_todos` | `put-todos` | `todos` (full list of `content`, `status`, optional `assignee`), optional `channel` |
 | `workspace_get_todos` | `get-todos` | Optional `channel`, `all`, `agent` |
+| `workspace_get_brief` | `get-brief` | Optional group/thread `channel` |
+| `workspace_update_brief` | `update-brief` | Optional `channel`; changed `objective`, `latest_result`, `open_questions`, `next_step`, `owner` |
 
 Discovery returns published capabilities, not host directories, private tools or
 knowledge. Keyword filtering is literal (space-separated terms must all match).
@@ -78,7 +80,13 @@ node packages/agent-connector/bin/agent-connector.js --help
 node packages/agent-collaboration/bin/collaboration.js --help
 ```
 
-The connector's existing MCP server exposes the seven tools. Claude MCP mode's
+Brief updates reuse the existing Workspace brief API through the scoped client.
+The client supplies network and source; callers cannot override identity. Writes
+require group membership and server authorization. Omitted fields are preserved;
+empty strings or an empty questions list clear the corresponding field. Native
+DMs do not have a shared brief. CLI and MCP return the same structured receipt.
+
+The connector's existing MCP server exposes the nine tools. Claude MCP mode's
 allowlist includes the read tools in plan mode and write tools in execute mode.
 The shared Workspace prompt/skill generator adds collaboration instructions and
 CLI usage for skill-driven adapters, including Codex and OpenClaw. Child processes

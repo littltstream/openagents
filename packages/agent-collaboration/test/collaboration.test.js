@@ -38,6 +38,7 @@ async function fixture(t) {
     ],
     directMessages: [],
     todos: new Map(),
+    briefs: new Map(),
     messages: [
       { id: 'event-1', source: 'openagents:Agent_A', timestamp: 1, payload: { content: 'first' } },
       { id: 'event-2', source: 'openagents:Agent_A', timestamp: 2, payload: { content: 'second' } },
@@ -57,6 +58,17 @@ async function fixture(t) {
     if (state.error === 'envelope') return reply(null, 200, 403);
     if (state.error === 'html') { res.writeHead(502); return res.end('<html>proxy failed</html>'); }
     if (url.pathname === '/v1/discover') return reply({ agents: state.agents, channels: state.channels });
+    const briefRoute = url.pathname.match(/^\/v1\/channels\/([^/]+)\/brief$/);
+    if (briefRoute) {
+      if (state.briefError) return reply(null, 403, 403);
+      const channel = decodeURIComponent(briefRoute[1]);
+      const previous = state.briefs.get(channel) || { channel, objective: null, open_questions: [] };
+      if (req.method === 'PUT') {
+        const { network, source, ...fields } = body;
+        state.briefs.set(channel, { ...previous, ...fields, updated_by: source });
+      }
+      return reply(state.briefs.get(channel) || previous);
+    }
     if (url.pathname === '/v1/todos') {
       if (req.method === 'PUT') {
         state.todos.set(`${body.channel}:${body.source}`, body.todos.map((item) => ({ ...item, created_by: body.source })));
@@ -435,6 +447,49 @@ test('skills-mode uses the actual CLI and adapter credentials without putting th
   assert.doesNotMatch(execute, /curl(?:\.exe)?[^\n]*\/v1\/(?:todos|discover)/);
   assert.doesNotMatch(execute, /curl(?:\.exe)?[^\n]*\/v1\/events\?[^\n]*sort=desc/);
   assert.doesNotMatch(execute, /ALWAYS use.*curl.*workspace operations/);
+});
+
+test('shared briefs use the same scoped implementation through CLI and MCP without raw HTTP arguments', async (t) => {
+  const { client, state, endpoint, ws } = await fixture(t);
+  const group = await client.createGroup({ title: 'Brief team', participants: ['Agent_A'] });
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'oa-brief-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'brief.json');
+  fs.writeFileSync(file, JSON.stringify({ channel: group.channel, objective: 'Analyze the local CSV', latest_result: 'Dispatched', open_questions: ['Await result'], owner: 'openagents:Agent_A' }));
+  const env = { OA_WORKSPACE_ENDPOINT: endpoint, OA_WORKSPACE_ID: 'ws-1', OA_AGENT_NAME: 'Agent_B', OA_WORKSPACE_TOKEN: TOKEN, OA_CHANNEL_NAME: 'general' };
+  const updated = await child(CLI, ['update-brief', '--args-file', file], env);
+  assert.equal(updated.code, 0, updated.stderr);
+  assert.equal(JSON.parse(updated.stdout).brief.updated_by, 'openagents:Agent_B');
+  const request = state.requests.find(r => r.method === 'PUT' && r.url.pathname.endsWith('/brief'));
+  assert.equal(request.body.network, 'ws-1');
+  assert.equal(request.body.source, 'openagents:Agent_B');
+  assert.equal(request.headers['x-agent-name'], 'Agent_B');
+  const mcp = new McpServer({ wsClient: ws, workspaceId: 'ws-1', agentName: 'Agent_B', token: TOKEN, channelName: group.channel });
+  const receipt = await mcp._dispatch('workspace_update_brief', { latest_result: '', open_questions: [] });
+  assert.equal(receipt.structuredContent.brief.objective, 'Analyze the local CSV');
+  assert.equal(receipt.structuredContent.brief.latest_result, '');
+  assert.deepEqual(receipt.structuredContent.brief.open_questions, []);
+  fs.writeFileSync(file, JSON.stringify({ channel: group.channel }));
+  const read = await child(CLI, ['get-brief', '--args-file', file], env);
+  assert.equal(read.code, 0, read.stderr);
+  assert.deepEqual(JSON.parse(read.stdout), (await mcp._dispatch('workspace_get_brief', {})).structuredContent);
+  const count = state.requests.filter(r => r.method === 'PUT').length;
+  for (const args of [{ source: 'openagents:Agent_A' }, { network: 'other' }, { next_owner: 'Agent_A' }, { open_questions: [1] }, {}]) {
+    assert.equal((await mcp._dispatch('workspace_update_brief', args)).isError, true);
+  }
+  await assert.rejects(() => client.updateBrief({ channel: 'readable', objective: 'Unauthorized edit' }), /participant/);
+  await assert.rejects(() => client.getBrief({ channel: 'dm:human:someone@example.test' }), /do not have/);
+  assert.equal(state.requests.filter(r => r.method === 'PUT').length, count);
+  state.briefError = true;
+  assert.equal((await mcp._dispatch('workspace_update_brief', { next_step: 'Verify' })).isError, true);
+  const defs = buildToolDefs(new Set());
+  for (const name of ['workspace_get_brief', 'workspace_update_brief']) assert.equal(defs.filter(t => t.name === name).length, 1);
+  const prompt = buildApiSkillsPrompt({ endpoint, workspaceId: 'ws-1', agentName: 'Agent_B', token: TOKEN, channelName: group.channel });
+  assert.match(prompt, /update-brief --args-file/);
+  assert.doesNotMatch(prompt, /PUT \/v1\/channels\/<thread>\/brief/);
+  const plan = buildApiSkillsPrompt({ endpoint, workspaceId: 'ws-1', agentName: 'Agent_B', token: TOKEN, channelName: group.channel, mode: 'plan' });
+  assert.match(plan, /get-brief/);
+  assert.doesNotMatch(plan, /update-brief --args-file/);
 });
 
 test('planning uses the same scoped implementation through CLI and MCP, with explicit failures', async (t) => {

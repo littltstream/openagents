@@ -186,6 +186,23 @@ class TestBriefWriters:
 
 
 class TestBriefVisibility:
+    def test_authenticated_agent_edits_only_its_own_threads_and_cannot_forge_writer(self, client, workspace, people):
+        ch = _create_thread(client, workspace, name="agent-private", by="mia", visibility="private")
+        alpha = {**_tok(workspace), "X-Agent-Name": "agent-alpha"}
+        r = _put(client, workspace, ch, alpha, objective="Analyze locally", source="openagents:agent-alpha")
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["updated_by"] == "openagents:agent-alpha"
+        assert _get(client, workspace, ch, alpha).json()["data"]["can_edit"] is True
+        assert _put(client, workspace, ch, alpha, source="openagents:agent-beta", latest_result="Forged").status_code == 403
+        assert _get(client, workspace, ch, alpha).json()["data"]["latest_result"] is None
+        joined = client.post("/v1/join", headers=_tok(workspace), json={
+            "network": workspace["id"], "token": workspace["token"], "agent_name": "agent-beta",
+        })
+        assert joined.status_code == 200, joined.text
+        beta = {**_tok(workspace), "X-Agent-Name": "agent-beta"}
+        assert _get(client, workspace, ch, beta).status_code == 403
+        assert _put(client, workspace, ch, beta, objective="Not a participant").status_code == 403
+
     def test_private_thread_hidden_from_non_participants(self, client, workspace, people):
         ch = _create_thread(client, workspace, name="secret", by="mia", visibility="private")
         _put(client, workspace, ch, _tok(workspace), objective="hush", source="openagents:agent-alpha")

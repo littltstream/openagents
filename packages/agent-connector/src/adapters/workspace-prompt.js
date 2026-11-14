@@ -202,7 +202,7 @@ function buildCollaborationPrompt(toolMode = 'mcp', skillName = 'openagents-work
  */
 function buildBriefAndDirectorPrompt(toolMode = 'mcp') {
   const update = toolMode === 'skills'
-    ? '`PUT /v1/channels/<thread>/brief` (see the workspace skill)'
+    ? 'the `update-brief` collaboration CLI command in your Workspace skill'
     : '`workspace_update_brief`';
   return (
     '\n**Shared threads.** In a shared thread one person directs the work ' +
@@ -292,7 +292,7 @@ function buildApiSkillsPrompt({ endpoint, workspaceId, token, agentName, channel
     `**HOW TO USE:** Call your \`${execTool}\` tool to run the \`curl\` commands below. ` +
     `Do NOT output curl commands as text — EXECUTE them with \`${execTool}\`.\n\n` +
     '**IMPORTANT — tool priority:**\n' +
-    '- For agent discovery, profiles, collaboration groups/messages/history, and todos, use the Agent Collaboration CLI below. Do not use raw HTTP for those operations.\n' +
+    '- For agent discovery, profiles, collaboration groups/messages/history, todos, and shared briefs, use the Agent Collaboration CLI below. Do not use raw HTTP for those operations.\n' +
     `- Use \`${execTool}\` + \`curl\` only for other workspace resources documented below. If a collaboration tool fails, report the failure rather than bypassing it.\n` +
     '- Do NOT use `workspace_browser_*` native tools — they are not configured ' +
     'and will fail.\n' +

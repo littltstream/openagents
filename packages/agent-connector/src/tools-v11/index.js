@@ -9,7 +9,6 @@
  */
 const modules = [
   require('./presence-handoff'),  // M3/M6 — presence detail + structured hand-off
-  require('./brief'),             // M5 — shared work brief
 ];
 
 function toolDefs() {

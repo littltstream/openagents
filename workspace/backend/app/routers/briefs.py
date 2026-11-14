@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.access import resolve_user_role, role_at_least
 from app.database import get_db
-from app.models import Channel, ChannelBrief, ChannelHumanMember, Workspace
+from app.models import Channel, ChannelBrief, ChannelHumanMember, ChannelMember, Workspace
 from app.response import ResponseCode, json_response, success_response
 from app.routers.network import _resolve_workspace, _verify_workspace_access
 from app.services.visibility import Viewer, can_view_channel_name, resolve_viewer
@@ -83,6 +83,11 @@ def _can_edit(db: Session, workspace: Workspace, viewer: Viewer, channel: Option
               authorization: Optional[str]) -> bool:
     if viewer.machine:
         return True
+    if viewer.kind == 'agent':
+        return channel is not None and db.execute(select(ChannelMember.agent_name).where(
+            ChannelMember.channel_id == channel.id,
+            ChannelMember.agent_name == viewer.agent_name,
+        )).first() is not None
     if not viewer.email:
         return False
     if role_at_least(resolve_user_role(db, workspace, authorization), "admin"):
@@ -147,7 +152,7 @@ def get_brief(
 
     channel_name = _norm_channel(channel)
     viewer = resolve_viewer(db, workspace, x_workspace_token, authorization)
-    if viewer.is_human and not can_view_channel_name(db, str(workspace.id), viewer, channel_name):
+    if not viewer.machine and not can_view_channel_name(db, str(workspace.id), viewer, channel_name):
         return json_response(ResponseCode.FORBIDDEN, "No access to this thread")
 
     ch = _load_channel(db, workspace, channel_name)
@@ -182,7 +187,7 @@ def put_brief(
     if not channel_name:
         return json_response(ResponseCode.BAD_REQUEST, "channel is required")
     viewer = resolve_viewer(db, workspace, x_workspace_token, authorization)
-    if viewer.is_human and not can_view_channel_name(db, str(workspace.id), viewer, channel_name):
+    if not viewer.machine and not can_view_channel_name(db, str(workspace.id), viewer, channel_name):
         return json_response(ResponseCode.FORBIDDEN, "No access to this thread")
 
     ch = _load_channel(db, workspace, channel_name)
@@ -197,6 +202,10 @@ def put_brief(
 
     if viewer.machine:
         updated_by = (body.source or "").strip() or "openagents:unknown"
+    elif viewer.kind == 'agent':
+        updated_by = viewer.label
+        if body.source is not None and body.source != updated_by:
+            return json_response(ResponseCode.FORBIDDEN, "Source does not match authenticated agent")
     else:
         updated_by = f"human:{viewer.email}"
 

@@ -4,6 +4,7 @@ const { CollaborationClient } = require('./client');
 
 const string = { type: 'string', minLength: 1 };
 const agents = { type: 'array', items: string, uniqueItems: true };
+const briefText = { type: 'string', description: 'An empty string clears the field; omitted fields are preserved.' };
 const defs = [
   {
     name: 'workspace_discover_agents',
@@ -54,15 +55,30 @@ const defs = [
     description: 'Read your to-do list in the current or specified conversation. all=true reads all participants; agent filters by assignee.',
     inputSchema: { type: 'object', additionalProperties: false, properties: { channel: string, all: { type: 'boolean' }, agent: string } },
   },
+  {
+    name: 'workspace_get_brief',
+    description: 'Read the shared work brief of a visible group/thread. Defaults to the current thread. Native direct conversations do not have a brief.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { channel: string } },
+  },
+  {
+    name: 'workspace_update_brief',
+    description: 'Update the shared work brief after a meaningful step. Pass channel to update a collaboration group or its original user thread. Only provided fields change. Use this tool instead of raw HTTP.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {
+      channel: string, objective: briefText, latest_result: briefText, next_step: briefText,
+      owner: { ...briefText, description: 'Owner of the next step: openagents:<agent> or human:<email>. This label does not grant permissions.' },
+      open_questions: { type: 'array', items: { type: 'string' }, description: 'Replaces the list; [] clears it.' },
+    } },
+  },
 ];
 
 const methods = {
   workspace_discover_agents: 'discover', workspace_get_agent_profile: 'profile',
   workspace_create_group: 'createGroup', workspace_send_message: 'sendMessage', workspace_get_messages: 'getMessages',
   workspace_put_todos: 'putTodos', workspace_get_todos: 'getTodos',
+  workspace_get_brief: 'getBrief', workspace_update_brief: 'updateBrief',
 };
-const readToolNames = ['workspace_discover_agents', 'workspace_get_agent_profile', 'workspace_get_messages', 'workspace_get_todos'];
-const writeToolNames = ['workspace_create_group', 'workspace_send_message', 'workspace_put_todos'];
+const readToolNames = ['workspace_discover_agents', 'workspace_get_agent_profile', 'workspace_get_messages', 'workspace_get_todos', 'workspace_get_brief'];
+const writeToolNames = ['workspace_create_group', 'workspace_send_message', 'workspace_put_todos', 'workspace_update_brief'];
 
 // MCP and CLI share validation, so neither interface can inject endpoint,
 // credentials, source identity, owner email, or arbitrary event payloads.
@@ -76,7 +92,7 @@ function validate(name, args) {
     const field = schema.properties[key];
     if (!field) throw new Error(`Unsupported argument: ${key}`);
     const type = field.type;
-    if ((type === 'array' && (!Array.isArray(value) || (field.items.type === 'string' && value.some((v) => typeof v !== 'string' || !v.trim()))))
+    if ((type === 'array' && (!Array.isArray(value) || (field.items.type === 'string' && value.some((v) => typeof v !== 'string' || (field.items.minLength && !v.trim())))))
       || (type === 'integer' && (!Number.isInteger(value) || value < field.minimum || value > field.maximum))
       || (['string', 'boolean'].includes(type) && typeof value !== type)
       || (type === 'string' && field.minLength && !value.trim())) throw new Error(`Invalid ${key}`);

@@ -227,6 +227,32 @@ class CollaborationClient {
     return `/${encodeURIComponent(this.workspaceId)}/threads/${encodeURIComponent(name)}`;
   }
 
+  async getBrief({ channel = this.channelName } = {}) {
+    const name = channelName(channel);
+    if (name.startsWith('dm:')) throw new Error('Native direct conversations do not have a shared work brief');
+    this._channel(await this._discover(), name);
+    const brief = unwrap(await this.ws.getBrief(this.workspaceId, this.token, name));
+    if (!brief || brief.channel !== name) throw new Error('Invalid brief response');
+    return { channel: name, brief };
+  }
+
+  async updateBrief({ channel = this.channelName, ...fields } = {}) {
+    const name = channelName(channel);
+    if (name.startsWith('dm:')) throw new Error('Native direct conversations do not have a shared work brief');
+    const allowed = ['objective', 'latest_result', 'open_questions', 'next_step', 'owner'];
+    if (!Object.keys(fields).length) throw new Error('Pass at least one brief field to update');
+    for (const [key, value] of Object.entries(fields)) {
+      if (!allowed.includes(key)) throw new Error(`Unsupported brief field: ${key}`);
+      if (key === 'open_questions' ? !Array.isArray(value) || value.some(q => typeof q !== 'string') : typeof value !== 'string') {
+        throw new Error(`Invalid brief field: ${key}`);
+      }
+    }
+    this._channel(await this._discover(), name, true);
+    const brief = unwrap(await this.ws.putBrief(this.workspaceId, this.token, name, fields, { source: `openagents:${this.agentName}` }));
+    if (!brief || brief.channel !== name) throw new Error('Invalid brief update receipt; inspect the brief before retrying');
+    return { channel: name, brief };
+  }
+
   async getTodos({ channel = this.channelName, all = false, agent } = {}) {
     const name = channelName(channel);
     if (typeof all !== 'boolean') throw new Error('Invalid all filter');

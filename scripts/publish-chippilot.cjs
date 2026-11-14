@@ -35,6 +35,23 @@ for (const name of ['install.sh', 'install.ps1', 'release.json', 'chippilot-cli.
 const sums = files.map(file => crypto.createHash('sha256').update(fs.readFileSync(path.join(output, file))).digest('hex') + '  ' + file).join('\n') + '\n';
 fs.writeFileSync(path.join(output, 'SHA256SUMS'), sums);
 const notes = path.join(output, 'release-notes.md');
-fs.writeFileSync(notes, `ChipPilot OpenAgents ${release.desktopVersion}\n\nIncludes agent discovery, private group creation, messaging, and workspace descriptions. Desktop server/API/OIDC/update endpoints are configurable under Settings > Network. Defaults: ${release.defaultWebUrl}, ${release.defaultApiUrl}, ${release.defaultOidcIssuer}.\n\nWorkspace entry buttons and pairing links use the configured frontend, including records saved with old API addresses. API and web settings are labelled separately. Collaboration sends carry per-turn context so an adapter summary does not wake the same recipient again after a routed tool result. The matching backend update also accepts paired-device credentials for that device's own agent shared context. Update both the connector and backend to enable these collaboration fixes.\n\nNew in revision 3: agn description <name> [--set TEXT] reads, updates or clears the local default capability description without restarting running agents or overwriting existing Workspace descriptions. Desktop workspace and agent entry buttons recognize authenticated membership across old API/domain records and open the current server workspace using the account session. The develop source branch also includes the deployed Keycloak authentication, verified registration/password email flows, self-hosted invitations and server deployment configuration.\n\nDesktop installers are unsigned community builds (no upstream signing certificates or Apple notarization).\n\nCLI: download install.sh (macOS/Linux) or install.ps1 (Windows), then run it. Existing Agent configurations and workspace data are preserved.\n\nKeycloak: allow the native PKCE redirect http://127.0.0.1:18765/callback for the configured public client.\n`);
-fs.appendFileSync(notes, `\nRevision 3 rebuilt from ${buildSha}: preserve native DM origins; include the verified requesting user in agent-created private teams; return canonical frontend group links; expose scoped todos through both collaboration CLI and MCP; use consistent collaboration tool instructions; prevent completed checklist updates from restarting the working indicator. Human participants retain normal thread permissions.\n`);
+fs.writeFileSync(notes, `ChipPilot OpenAgents ${release.desktopVersion}
+
+Revision 4 adds shared work briefs to the collaboration CLI and MCP tools:
+- CLI: get-brief and update-brief; MCP: workspace_get_brief and workspace_update_brief.
+- Both interfaces share validation, caller identity, channel checks and partial-update behavior. Agents use these tools instead of raw HTTP; native DMs have no shared brief.
+- The matching backend lets authenticated agent members edit their group's brief, checks private-thread visibility and rejects a forged source identity. Update the backend as well as the connector for this fix.
+
+Includes the existing discovery, agent-created private teams, user-visible collaboration links, scoped todos, return-to-origin messaging, local default descriptions and configurable Desktop API/web/OIDC endpoints. Human participants retain normal thread permissions.
+
+Defaults: ${release.defaultWebUrl}, ${release.defaultApiUrl}, ${release.defaultOidcIssuer}.
+
+Desktop installers are unsigned community builds (no upstream signing certificates or Apple notarization).
+
+CLI: download install.sh (macOS/Linux) or install.ps1 (Windows), then run it. Existing Agent configurations and workspace data are preserved. Existing ChipPilot CLI installations can use agn update.
+
+Keycloak: allow the native PKCE redirect http://127.0.0.1:18765/callback for the configured public client.
+
+Built from ${buildSha}.
+`);
 publishRelease({ release, sha: buildSha, output, files: [...files, 'SHA256SUMS'], notes });
