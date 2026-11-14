@@ -7,23 +7,31 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { publishRelease } = require('./publish-chippilot-release.cjs');
 
-function fixture(t, badDigest = false, alreadyPublished = false) {
+function fixture(t, badDigest = false, alreadyPublished = false, { newDraft = false, missingTag = false } = {}) {
   const output = fs.mkdtempSync(path.join(os.tmpdir(), 'chippilot-publish-'));
   t.after(() => fs.rmSync(output, { recursive: true, force: true }));
   const bytes = Buffer.from('newly built CLI');
   fs.writeFileSync(path.join(output, 'cli.tgz'), bytes);
   const sha = 'a'.repeat(40), calls = [];
-  let views = 0, tagSha = alreadyPublished ? sha : 'b'.repeat(40);
+  let created = !newDraft, uploaded = alreadyPublished, tagSha = missingTag ? null : alreadyPublished ? sha : 'b'.repeat(40);
+  const releaseData = () => ({ id: 1, tag_name: 'v3', draft: newDraft, assets: uploaded ? [
+    { id: 2, name: 'cli.tgz', size: bytes.length, digest: badDigest ? 'wrong' : 'sha256:' + crypto.createHash('sha256').update(bytes).digest('hex') },
+    { id: 3, name: 'obsolete.exe' },
+  ] : [] });
   const run = (command, args) => {
     assert.equal(command, 'gh');
     calls.push(args);
-    if (args[0] === 'api' && args[1].includes('/releases/tags/')) {
-      return JSON.stringify({ id: 1, assets: ++views === 1 && !alreadyPublished ? [] : [
-        { id: 2, name: 'cli.tgz', size: bytes.length, digest: badDigest ? 'wrong' : 'sha256:' + crypto.createHash('sha256').update(bytes).digest('hex') },
-        { id: 3, name: 'obsolete.exe' },
-      ] });
+    if (args[0] === 'api' && args.includes('repos/owner/repo/releases?per_page=100')) {
+      assert.ok(args.includes('--paginate') && args.includes('--slurp'));
+      return JSON.stringify([created ? [releaseData()] : []]);
     }
-    if (args[0] === 'api' && args[1].includes('/git/ref/tags/')) return JSON.stringify({ object: { sha: tagSha } });
+    if (args[0] === 'release' && args[1] === 'create') created = true;
+    if (args[0] === 'release' && args[1] === 'upload') uploaded = true;
+    if (args[0] === 'api' && args[1] === 'repos/owner/repo/releases/1') return JSON.stringify(releaseData());
+    if (args[0] === 'api' && args[1].includes('/git/ref/tags/')) {
+      if (!tagSha) { const error = new Error('Missing draft tag'); error.stderr = 'HTTP 404'; throw error; }
+      return JSON.stringify({ object: { sha: tagSha } });
+    }
     if (args.includes(`sha=${sha}`)) tagSha = sha;
     return '';
   };
@@ -62,4 +70,17 @@ test('a verified retry does not reupload assets or force an already correct tag'
   assert.equal(calls.some(c => c[0] === 'release' && c[1] === 'upload'), false);
   assert.equal(calls.some(c => c.includes('force=true')), false);
   assert.ok(calls.some(c => c.includes('draft=false')));
+});
+
+test('publishes a new draft by ID and creates its missing source tag after verification', t => {
+  const { calls, args } = fixture(t, false, false, { newDraft: true, missingTag: true });
+  publishRelease(args);
+  assert.ok(calls.some(c => c[0] === 'release' && c[1] === 'create'));
+  assert.ok(calls.some(c => c[0] === 'api' && c[1] === 'repos/owner/repo/releases/1'));
+  assert.equal(calls.some(c => c.some(a => a.includes('/releases/tags/'))), false);
+  const upload = calls.findIndex(c => c[0] === 'release' && c[1] === 'upload');
+  const verify = calls.findIndex(c => c[0] === 'api' && c[1] === 'repos/owner/repo/releases/1');
+  const tag = calls.findIndex(c => c.includes('POST') && c.includes('ref=refs/tags/v3'));
+  const publish = calls.findIndex(c => c.includes('draft=false'));
+  assert.ok(upload < verify && verify < tag && tag < publish);
 });

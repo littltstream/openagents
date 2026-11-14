@@ -9,11 +9,11 @@ function publishRelease({ release, sha, output, files, notes, run = execFileSync
   const repo = `repos/${release.repository}`;
   const gh = (args) => run('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   const api = (route) => JSON.parse(gh(['api', `${repo}/${route}`]));
-  let existing;
-  try { existing = api(`releases/tags/${release.tag}`); }
-  catch (error) {
-    if (!/HTTP 404/.test(String(error.stderr))) throw error;
-  }
+  // Drafts can be absent from the by-tag endpoint. List authenticated releases
+  // to find both drafts and public releases, then address the release by ID.
+  const findRelease = () => JSON.parse(gh(['api', '--paginate', '--slurp', `${repo}/releases?per_page=100`]))
+    .flat().find(item => item.tag_name === release.tag);
+  let existing = findRelease();
   if (existing?.immutable) throw new Error('The existing release is immutable and cannot be replaced');
 
   // All platform builds and local asset checks have succeeded before this call.
@@ -23,6 +23,8 @@ function publishRelease({ release, sha, output, files, notes, run = execFileSync
   if (!existing) {
     gh(['release', 'create', release.tag, '--repo', release.repository, '--target', sha,
       '--title', `ChipPilot OpenAgents ${release.desktopVersion}`, '--notes-file', notes, '--draft']);
+    existing = findRelease();
+    if (!existing) throw new Error('Created release could not be found in the authenticated release list');
   }
   const matches = (asset, file) => {
     const bytes = fs.readFileSync(path.join(output, file));
@@ -33,7 +35,7 @@ function publishRelease({ release, sha, output, files, notes, run = execFileSync
   if (pending.length) gh(['release', 'upload', release.tag, '--repo', release.repository,
     ...pending.map(file => path.join(output, file)), '--clobber']);
 
-  const uploaded = api(`releases/tags/${release.tag}`);
+  const uploaded = api(`releases/${existing.id}`);
   for (const file of files) {
     const bytes = fs.readFileSync(path.join(output, file));
     const asset = uploaded.assets.find(asset => asset.name === file);
@@ -42,8 +44,14 @@ function publishRelease({ release, sha, output, files, notes, run = execFileSync
       throw new Error(`Uploaded release asset failed verification: ${file}`);
     }
   }
-  let tag = api(`git/ref/tags/${release.tag}`);
-  if (existing && tag.object.sha !== sha) {
+  let tag;
+  try { tag = api(`git/ref/tags/${release.tag}`); }
+  catch (error) {
+    if (!/HTTP 404/.test(String(error.stderr))) throw error;
+    gh(['api', '--method', 'POST', `${repo}/git/refs`, '-f', `ref=refs/tags/${release.tag}`, '-f', `sha=${sha}`]);
+    tag = api(`git/ref/tags/${release.tag}`);
+  }
+  if (tag.object.sha !== sha) {
     gh(['api', '--method', 'PATCH', `${repo}/git/refs/tags/${release.tag}`, '-f', `sha=${sha}`, '-F', 'force=true']);
     tag = api(`git/ref/tags/${release.tag}`);
   }
